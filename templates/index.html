@@ -225,6 +225,25 @@
     .btn-trends:hover { background: #145a32; }
     .btn-trends.active { background: #1e8449; }
 
+    /* ── What If reset buttons ──────────────────────────────── */
+    .whatif-reset-btn {
+      background: none;
+      border: 1px solid #e74c3c;
+      color: #e74c3c;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-weight: bold;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-left: 4px;
+      vertical-align: middle;
+      transition: background 0.15s, color 0.15s;
+      line-height: 1.4;
+    }
+    .whatif-reset-btn:hover { background: #e74c3c; color: white; }
+    #whatif-reset-all-btn { background: #c0392b; }
+    #whatif-reset-all-btn:hover { background: #922b21; }
+
     /* ── Save overlay ────────────────────────────────────── */
     .overlay {
       position: fixed;
@@ -345,6 +364,7 @@
       </a>
       <button id="save-btn" onclick="showSaveOverlay()">💾 Save Changes</button>
       <button id="whatif-btn" class="btn-whatif" onclick="toggleWhatIf()">🔮 What If Mode</button>
+      <button id="whatif-reset-all-btn" class="hidden" onclick="resetAllSliders()">↺ Reset All</button>
       <button id="trends-btn" class="btn-trends" onclick="toggleTrends()">📊 Trends</button>
     </div>
     <div id="save-msg"></div>
@@ -602,7 +622,7 @@
             <td class="editable" contenteditable="true" style="background:${color};" data-field="name">${escapeHtml(cat.name)}</td>
             <td class="editable" contenteditable="true" style="background:${color};text-align:right;" data-field="amt" data-raw="${cat.amt}">${formatDollar(cat.amt)}</td>
             <td class="cat-pct" style="background:${color};text-align:center;">${pct}%</td>
-            <td style="background:${color};"><input type="range" class="whatif-slider" min="0" max="${cat.amt * 2 || 1000}" step="1" value="${cat.amt}"></td>
+            <td style="background:${color};white-space:nowrap;"><input type="range" class="whatif-slider" min="0" max="${cat.amt * 2 || 1000}" step="1" value="${cat.amt}" data-original="${cat.amt}"><button class="whatif-reset-btn hidden" onclick="resetSlider(this)" title="Reset to original">↺</button></td>
           </tr>`;
         });
       }
@@ -719,6 +739,11 @@
     const table = document.querySelector(".preview-table");
     btn.classList.toggle("active", whatIfActive);
     table.classList.toggle("whatif-active", whatIfActive);
+    if (!whatIfActive) {
+      document.getElementById("whatif-reset-all-btn").classList.add("hidden");
+    } else {
+      updateWhatIfResetAll();
+    }
   }
 
   function attachSliderListeners() {
@@ -785,7 +810,40 @@
             cells[3].textContent = income ? ((totalSpending / income) * 100).toFixed(1) + "%" : "0.0%";
           }
         });
+
+        // Show/hide per-slider reset button
+        const resetBtn = this.closest("td").querySelector(".whatif-reset-btn");
+        if (resetBtn) {
+          resetBtn.classList.toggle("hidden",
+            parseFloat(this.value) === parseFloat(this.dataset.original));
+        }
+        updateWhatIfResetAll();
       });
+    });
+  }
+
+  function updateWhatIfResetAll() {
+    const anyChanged = Array.from(
+      document.querySelectorAll(".whatif-slider")
+    ).some(s => parseFloat(s.value) !== parseFloat(s.dataset.original));
+    const resetAllBtn = document.getElementById("whatif-reset-all-btn");
+    if (whatIfActive && anyChanged) {
+      resetAllBtn.classList.remove("hidden");
+    } else {
+      resetAllBtn.classList.add("hidden");
+    }
+  }
+
+  function resetSlider(resetBtn) {
+    const slider = resetBtn.closest("td").querySelector(".whatif-slider");
+    slider.value = slider.dataset.original;
+    slider.dispatchEvent(new Event("input"));
+  }
+
+  function resetAllSliders() {
+    document.querySelectorAll(".whatif-slider").forEach(slider => {
+      slider.value = slider.dataset.original;
+      slider.dispatchEvent(new Event("input"));
     });
   }
 
