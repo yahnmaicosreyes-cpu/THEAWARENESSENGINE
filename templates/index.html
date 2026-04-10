@@ -18,7 +18,7 @@
     }
 
     .container {
-      max-width: 720px;
+      max-width: 1100px;
       margin: 0 auto;
     }
 
@@ -99,7 +99,6 @@
     button:hover   { background: #00bcd4; }
     button:active  { transform: scale(0.98); }
     button:disabled { background: #aaa; cursor: not-allowed; }
-    .btn-green { background: #1e8449; }
     .btn-green:hover { background: #00bcd4; }
 
     /* ── Income display ─────────────────────────────────── */
@@ -218,12 +217,12 @@
     /* ── What If sliders ─────────────────────────────────── */
     .whatif-slider { width: 100%; margin-top: 4px; display: none; accent-color: #2980b9; }
     .whatif-active .whatif-slider { display: block; }
-    .btn-whatif { background: #6c3483; }
-    .btn-whatif:hover { background: #512e5f; }
-    .btn-whatif.active { background: #9b59b6; }
-    .btn-trends { background: #1a6b5c; }
-    .btn-trends:hover { background: #145a32; }
-    .btn-trends.active { background: #1e8449; }
+    .btn-whatif { background: #0f1f3d; }
+    .btn-whatif:hover { background: #00bcd4; }
+    .btn-whatif.active { background: #00bcd4; }
+    .btn-trends { background: #0f1f3d; }
+    .btn-trends:hover { background: #00bcd4; }
+    .btn-trends.active { background: #00bcd4; }
 
     /* ── What If reset buttons ──────────────────────────────── */
     .whatif-reset-btn {
@@ -358,7 +357,7 @@
     <div id="pie-container" class="hidden" style="max-width:380px;margin:20px auto 0;">
       <canvas id="pie-chart"></canvas>
     </div>
-    <div style="display:flex; gap:12px; margin-top:16px; align-items:center; flex-wrap:wrap;">
+    <div style="display:flex; gap:12px; margin-top:16px; align-items:center; justify-content:center; flex-wrap:nowrap;">
       <a href="/download">
         <button class="btn-green">⬇ Download .xlsx</button>
       </a>
