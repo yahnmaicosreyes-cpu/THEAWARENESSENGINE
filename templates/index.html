@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SimplCalc "THEE AWARENESS ENGINE"</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', Arial, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a1a;
+      padding: 20px;
+      padding-top: 60px;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    /* ── Header ─────────────────────────────────────────── */
+    .header {
+      background: linear-gradient(135deg, #0f1f3d, #1a3a5c);
+      color: white;
+      padding: 24px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      text-align: center;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+    .header h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; letter-spacing: 0.3px; }
+    .header p  { font-size: 14px; opacity: 0.85; }
+
+    /* ── Cards ──────────────────────────────────────────── */
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 20px;
+      border: 1px solid #dde;
+      border-top: 3px solid #00bcd4;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    }
+    .card h2 {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 14px;
+      border-bottom: 2px solid #0f1f3d;
+      padding-bottom: 8px;
+    }
+
+    /* ── Step badges ────────────────────────────────────── */
+    .step-badge {
+      display: inline-block;
+      background: #0f1f3d;
+      color: white;
+      border-radius: 50%;
+      width: 26px; height: 26px;
+      text-align: center;
+      line-height: 26px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-right: 8px;
+    }
+
+    /* ── Upload area ────────────────────────────────────── */
+    .upload-box {
+      border: 2px dashed #aab;
+      border-radius: 6px;
+      padding: 30px;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .upload-box:hover { background: #f7f8ff; }
+    .upload-box input  { display: none; }
+    .upload-box label  { cursor: pointer; font-size: 15px; }
+    .upload-box .hint  { font-size: 12px; color: #888; margin-top: 8px; }
+    #file-name { margin-top: 10px; font-size: 13px; color: #0f1f3d; font-weight: 600; }
+
+    /* ── Buttons ────────────────────────────────────────── */
+    button {
+      background: #0f1f3d;
+      color: white;
+      border: none;
+      padding: 12px 28px;
+      font-size: 14px;
+      font-family: 'Inter', Arial, sans-serif;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+      letter-spacing: 0.2px;
+    }
+    button:hover   { background: #00bcd4; }
+    button:active  { transform: scale(0.98); }
+    button:disabled { background: #aaa; cursor: not-allowed; }
+    .btn-green { background: #1e8449; }
+    .btn-green:hover { background: #00bcd4; }
+
+    /* ── Income display ─────────────────────────────────── */
+    .income-box {
+      background: #eaf4fb;
+      border: 1px solid #aed6f1;
+      border-radius: 6px;
+      padding: 14px 20px;
+      font-size: 15px;
+      margin-bottom: 16px;
+    }
+    .income-box span { font-weight: bold; font-size: 17px; color: #1a5276; }
+
+    /* ── Category assignment rows ───────────────────────── */
+    .cat-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid #eee;
+      gap: 12px;
+    }
+    .cat-row:last-child { border-bottom: none; }
+
+    .cat-info { flex: 1; }
+    .cat-name  { font-size: 14px; font-weight: bold; }
+    .cat-avg   { font-size: 12px; color: #666; margin-top: 2px; }
+
+    .bucket-choices { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    .choice-btn {
+      padding: 7px 14px;
+      font-size: 12px;
+      border-radius: 20px;
+      border: 2px solid #ccc;
+      background: white;
+      color: #444;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-weight: bold;
+    }
+    .choice-btn:hover { border-color: #0f1f3d; color: #0f1f3d; }
+
+    .choice-btn.selected-Necessities  { background: #d6eaf8; border-color: #2980b9; color: #1a5276; }
+    .choice-btn.selected-Luxuries     { background: #d5f5e3; border-color: #27ae60; color: #145a32; }
+    .choice-btn.selected-FutureSelf   { background: #fef9e7; border-color: #f39c12; color: #7d6608; }
+    .choice-btn.selected-LeaveOut     { background: #f2f3f4; border-color: #95a5a6; color: #555; }
+
+    /* ── Progress bar ───────────────────────────────────── */
+    .progress-bar {
+      background: #eee;
+      border-radius: 8px;
+      height: 12px;
+      margin: 10px 0;
+      overflow: hidden;
+    }
+    .progress-fill {
+      background: #00bcd4;
+      height: 100%;
+      transition: width 0.3s;
+      border-radius: 8px;
+    }
+    .progress-text { font-size: 12px; color: #666; text-align: right; }
+
+    /* ── Messages ───────────────────────────────────────── */
+    .msg {
+      padding: 12px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      margin-top: 12px;
+    }
+    .msg-error   { background: #fde8e8; color: #c0392b; border: 1px solid #e74c3c; }
+    .msg-success { background: #d5f5e3; color: #145a32; border: 1px solid #27ae60; }
+
+    /* ── Hidden sections ────────────────────────────────── */
+    .hidden { display: none !important; }
+
+    /* ── Fixed top bar ───────────────────────────────────── */
+    .top-bar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      background: #0f1f3d;
+      padding: 10px 20px;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      z-index: 1000;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    }
+    .top-bar button {
+      background: #1a3a5c;
+      padding: 8px 18px;
+      font-size: 13px;
+    }
+    .top-bar button:hover { background: #00bcd4; }
+
+    /* ── Spreadsheet preview ─────────────────────────────── */
+    #table-container { overflow-x: auto; margin-top: 12px; }
+    .preview-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: 'Inter', Arial, sans-serif;
+      font-size: 13px;
+    }
+    .preview-table td {
+      padding: 8px 10px;
+      border: 1px solid #ccc;
+      vertical-align: middle;
+    }
+    .preview-table .spacer-row td { border: none; height: 5px; background: transparent; }
+    .preview-table .editable { cursor: text; }
+    .preview-table .editable:hover { outline: 1px dashed #aaa; }
+    .preview-table .editable:focus { outline: 2px solid #00bcd4; background: #fff !important; }
+    .preview-table .edited { background: #fffde7 !important; }
+
+    /* ── What If sliders ─────────────────────────────────── */
+    .whatif-slider { width: 100%; margin-top: 4px; display: none; accent-color: #2980b9; }
+    .whatif-active .whatif-slider { display: block; }
+    .btn-whatif { background: #6c3483; }
+    .btn-whatif:hover { background: #512e5f; }
+    .btn-whatif.active { background: #9b59b6; }
+    .btn-trends { background: #1a6b5c; }
+    .btn-trends:hover { background: #145a32; }
+    .btn-trends.active { background: #1e8449; }
+
+    /* ── Save overlay ────────────────────────────────────── */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+    }
+    .overlay-box {
+      background: white;
+      border-radius: 10px;
+      padding: 36px 32px;
+      text-align: center;
+      max-width: 420px;
+      width: 90%;
+      box-shadow: 0 6px 30px rgba(0,0,0,0.3);
+    }
+    .overlay-box h3 { font-size: 18px; margin-bottom: 10px; color: #2c3e50; }
+    .overlay-box p  { font-size: 14px; color: #555; margin-bottom: 20px; }
+    .overlay-actions { display: flex; gap: 12px; justify-content: center; }
+    .btn-red { background: #c0392b; }
+    .btn-red:hover { background: #922b21; }
+
+    /* ── Loading spinner ─────────────────────────────────── */
+    .spinner {
+      display: inline-block;
+      width: 18px; height: 18px;
+      border: 3px solid #fff;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<div class="top-bar">
+  <button onclick="resetApp()">↩ Start Over</button>
+</div>
+
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>⚡ The Awareness Engine</h1>
+    <p>Upload your spreadsheet. Label your categories. Get the truth.</p>
+  </div>
+
+  <!-- STEP 1: Upload -->
+  <div class="card" id="step1-card">
+    <h2><span class="step-badge">1</span>Upload Your Spreadsheet</h2>
+    <div class="upload-box" onclick="document.getElementById('file-input').click()">
+      <label>📂 Click here to choose your .xlsx file</label>
+      <div class="hint">ONLY COMPATIBLE WITH .XLSX FILES</div>
+      <input type="file" id="file-input" accept=".xlsx" onchange="handleFileSelect(this)" />
+      <div id="file-name"></div>
+    </div>
+    <br/>
+    <button id="upload-btn" onclick="uploadFile()" disabled>
+      Scan My Spreadsheet
+    </button>
+    <div id="upload-msg"></div>
+  </div>
+
+  <!-- STEP 2: Assign Categories -->
+  <div class="card hidden" id="step2-card">
+    <h2><span class="step-badge">2</span>Where Does Each Category Belong?</h2>
+
+    <div class="income-box">
+      Your Average Monthly Expenses: <span id="expenses-display">$0</span><br/>
+      Your Average Monthly Income: <span id="income-display">$0</span>
+    </div>
+
+    <div id="month-selector" style="margin-bottom:16px;">
+      <p style="font-size:13px;font-weight:bold;margin-bottom:8px;">Which months should be averaged?</p>
+      <div id="month-checkboxes" style="display:flex;gap:10px;flex-wrap:wrap;font-size:13px;"></div>
+    </div>
+
+    <p style="font-size:13px; color:#555; margin-bottom:16px;">
+      For each category below, choose the bucket it belongs in.
+      <strong>You decide — no guessing.</strong>
+    </p>
+
+    <div class="progress-bar">
+      <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+    <div class="progress-text" id="progress-text">0 of 0 labeled</div>
+
+    <div id="category-list"></div>
+
+    <br/>
+    <button id="generate-btn" onclick="generateReport()" disabled>
+      ⚡ Generate My Awareness Report
+    </button>
+    <div id="generate-msg"></div>
+  </div>
+
+  <!-- STEP 3: View, Edit & Download -->
+  <div class="card hidden" id="step3-card">
+    <h2><span class="step-badge">3</span>Your Awareness Report</h2>
+    <p style="font-size:13px; color:#555; margin-bottom:12px;">
+      Click any <strong>category name</strong> or <strong>dollar amount</strong> to edit inline.
+      Totals and percentages recalculate when you save.
+    </p>
+    <div id="table-container"></div>
+    <div id="trends-container" class="hidden"></div>
+    <div id="pie-container" class="hidden" style="max-width:380px;margin:20px auto 0;">
+      <canvas id="pie-chart"></canvas>
+    </div>
+    <div style="display:flex; gap:12px; margin-top:16px; align-items:center; flex-wrap:wrap;">
+      <a href="/download">
+        <button class="btn-green">⬇ Download .xlsx</button>
+      </a>
+      <button id="save-btn" onclick="showSaveOverlay()">💾 Save Changes</button>
+      <button id="whatif-btn" class="btn-whatif" onclick="toggleWhatIf()">🔮 What If Mode</button>
+      <button id="trends-btn" class="btn-trends" onclick="toggleTrends()">📊 Trends</button>
+    </div>
+    <div id="save-msg"></div>
+  </div>
+
+</div>
+
+<!-- Save / Discard overlay -->
+<div id="save-overlay" class="overlay hidden">
+  <div class="overlay-box">
+    <h3>Save Changes?</h3>
+    <p>Save your edits and regenerate the report, or discard and revert to the last saved version.</p>
+    <div class="overlay-actions">
+      <button class="btn-green" onclick="confirmSave()">✅ Save</button>
+      <button class="btn-red" onclick="confirmDiscard()">✖ Discard</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── State ─────────────────────────────────────────────────────────────────
+  let selectedFile      = null;
+  let categories        = [];           // [{ name, avg }]
+  let assignments       = {};           // { cat_name: bucket_label }
+  let tableData         = null;         // current rendered table data
+  let originalTableData = null;         // snapshot at last save/generate
+  let trendData         = null;         // { monthly_breakdown, trend_months }
+  const BUCKETS = ["Necessities", "Luxuries", "Future Self", "Leave Out"];
+
+  // ── Step 1: File select ──────────────────────────────────────────────────
+  function handleFileSelect(input) {
+    selectedFile = input.files[0];
+    document.getElementById("file-name").textContent =
+      selectedFile ? `Selected: ${selectedFile.name}` : "";
+    document.getElementById("upload-btn").disabled = !selectedFile;
+  }
+
+  async function uploadFile() {
+    const btn = document.getElementById("upload-btn");
+    const msg = document.getElementById("upload-msg");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Scanning...';
+    msg.innerHTML = "";
+
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+
+    try {
+      const res  = await fetch("/upload", { method: "POST", body: formData });
+      const data = await res.json();
+
+      if (data.error) {
+        msg.innerHTML = `<div class="msg msg-error">❌ ${data.error}</div>`;
+        btn.disabled = false;
+        btn.textContent = "Scan My Spreadsheet";
+        return;
+      }
+
+      // Show expenses and income
+      const totalExpenses = data.categories.reduce((sum, c) => sum + c.avg, 0);
+      document.getElementById("expenses-display").textContent = formatDollar(totalExpenses);
+      document.getElementById("income-display").textContent = formatDollar(data.income);
+
+      // Build month checkboxes
+      const monthBox = document.getElementById("month-checkboxes");
+      monthBox.innerHTML = "";
+      data.months_found.forEach(m => {
+        const label = document.createElement("label");
+        label.style.cssText = "display:flex;align-items:center;gap:4px;cursor:pointer;";
+        label.innerHTML = `<input type="checkbox" value="${m}" checked> ${m}`;
+        monthBox.appendChild(label);
+      });
+
+      // Build category rows
+      categories = data.categories;
+      assignments = {};
+      buildCategoryRows(categories);
+
+      // Transition to step 2
+      document.getElementById("step1-card").style.opacity = "0.5";
+      document.getElementById("step2-card").classList.remove("hidden");
+      document.getElementById("step2-card").scrollIntoView({ behavior: "smooth" });
+
+      btn.innerHTML = "✅ Done";
+      msg.innerHTML =
+        `<div class="msg msg-success">✅ Found data from: ${data.months_found.join(", ")}</div>`;
+      return;
+
+    } catch (e) {
+      msg.innerHTML = `<div class="msg msg-error">❌ Something went wrong: ${e.message}</div>`;
+    }
+
+    btn.disabled = false;
+    btn.textContent = "Scan My Spreadsheet";
+  }
+
+  // ── Step 2: Category assignment ──────────────────────────────────────────
+  function buildCategoryRows(cats) {
+    const list = document.getElementById("category-list");
+    list.innerHTML = "";
+
+    cats.forEach(cat => {
+      const row = document.createElement("div");
+      row.className = "cat-row";
+      row.id = `row-${sanitizeId(cat.name)}`;
+
+      const info = document.createElement("div");
+      info.className = "cat-info";
+      info.innerHTML = `
+        <div class="cat-name">${cat.name}</div>
+        <div class="cat-avg">Avg monthly: ${formatDollar(cat.avg)}</div>
+      `;
+
+      const choices = document.createElement("div");
+      choices.className = "bucket-choices";
+
+      BUCKETS.forEach(bucket => {
+        const btn = document.createElement("button");
+        btn.className = "choice-btn";
+        btn.textContent = bucket;
+        btn.dataset.bucket = bucket;
+        btn.onclick = () => selectBucket(cat.name, bucket);
+        choices.appendChild(btn);
+      });
+
+      row.appendChild(info);
+      row.appendChild(choices);
+      list.appendChild(row);
+    });
+
+    updateProgress();
+  }
+
+  function sanitizeId(name) {
+    return name.replace(/[^a-zA-Z0-9]/g, "_");
+  }
+
+  function selectBucket(catName, bucket) {
+    assignments[catName] = bucket;
+
+    // Update button styles in this row
+    const row = document.getElementById(`row-${sanitizeId(catName)}`);
+    row.querySelectorAll(".choice-btn").forEach(btn => {
+      btn.className = "choice-btn";
+      if (btn.dataset.bucket === bucket) {
+        const key = bucket.replace(" ", "");
+        btn.classList.add(`selected-${key}`);
+      }
+    });
+
+    updateProgress();
+  }
+
+  function updateProgress() {
+    const total   = categories.length;
+    const labeled = Object.keys(assignments).length;
+    const pct     = total ? Math.round((labeled / total) * 100) : 0;
+
+    document.getElementById("progress-fill").style.width = pct + "%";
+    document.getElementById("progress-text").textContent =
+      `${labeled} of ${total} labeled`;
+    document.getElementById("generate-btn").disabled = (labeled < total);
+  }
+
+  // ── Step 3: Generate ─────────────────────────────────────────────────────
+  async function generateReport() {
+    const btn = document.getElementById("generate-btn");
+    const msg = document.getElementById("generate-msg");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Building your report...';
+    msg.innerHTML = "";
+
+    try {
+      const selected_months = Array.from(
+        document.querySelectorAll("#month-checkboxes input:checked")
+      ).map(cb => cb.value);
+
+      const res  = await fetch("/generate", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ assignments, selected_months })
+      });
+      const data = await res.json();
+
+      if (data.error) {
+        msg.innerHTML = `<div class="msg msg-error">❌ ${data.error}</div>`;
+        btn.disabled = false;
+        btn.textContent = "⚡ Generate My Awareness Report";
+        return;
+      }
+
+      renderTable(data.table);
+      originalTableData = JSON.parse(JSON.stringify(data.table));
+      trendData = { breakdown: data.monthly_breakdown, months: data.trend_months };
+
+      btn.innerHTML = "✅ Done";
+
+      document.getElementById("step2-card").style.opacity = "0.5";
+      document.getElementById("step3-card").classList.remove("hidden");
+      document.getElementById("step3-card").scrollIntoView({ behavior: "smooth" });
+
+    } catch (e) {
+      msg.innerHTML = `<div class="msg msg-error">❌ ${e.message}</div>`;
+      btn.disabled = false;
+      btn.textContent = "⚡ Generate My Awareness Report";
+    }
+  }
+
+  // ── Table rendering ───────────────────────────────────────────────────────
+  const BUCKET_COLORS = {
+    "Necessities": "#d6eaf8",
+    "Luxuries":    "#d5f5e3",
+    "Future Self": "#fef9e7"
+  };
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderTable(data) {
+    tableData = data;
+    const income = data.income;
+    let html = `<table class="preview-table">`;
+
+    html += `<tr><td colspan="4" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">THE AWARENESS ENGINE — My Financial Reality</td></tr>`;
+    html += `<tr class="spacer-row"><td colspan="4"></td></tr>`;
+    html += `<tr>
+      <td style="font-weight:bold;">Average Monthly Income</td>
+      <td style="font-weight:bold;text-align:right;">${formatDollar(income)}</td>
+      <td style="font-weight:bold;text-align:center;">100%</td>
+      <td></td>
+    </tr>`;
+    html += `<tr class="spacer-row"><td colspan="4"></td></tr>`;
+
+    data.buckets.forEach(bucket => {
+      const color = BUCKET_COLORS[bucket.name] || "#f8f8f8";
+      html += `<tr><td colspan="4" style="background:${color};font-weight:bold;font-size:13px;padding:10px;">▶ ${escapeHtml(bucket.name.toUpperCase())}</td></tr>`;
+      html += `<tr style="font-size:11px;font-weight:bold;text-align:center;">
+        <td style="background:${color};">Category</td>
+        <td style="background:${color};">Avg Monthly ($)</td>
+        <td style="background:${color};">% of Income</td>
+        <td style="background:${color};"></td>
+      </tr>`;
+
+      if (bucket.categories.length === 0) {
+        html += `<tr><td colspan="3" style="background:${color};color:#888;">(No categories assigned)</td><td style="background:${color};"></td></tr>`;
+      } else {
+        bucket.categories.forEach(cat => {
+          const pct = income ? ((cat.amt / income) * 100).toFixed(1) : "0.0";
+          html += `<tr class="cat-data-row" data-bucket="${escapeHtml(bucket.name)}">
+            <td class="editable" contenteditable="true" style="background:${color};" data-field="name">${escapeHtml(cat.name)}</td>
+            <td class="editable" contenteditable="true" style="background:${color};text-align:right;" data-field="amt" data-raw="${cat.amt}">${formatDollar(cat.amt)}</td>
+            <td class="cat-pct" style="background:${color};text-align:center;">${pct}%</td>
+            <td style="background:${color};"><input type="range" class="whatif-slider" min="0" max="${cat.amt * 2 || 1000}" step="1" value="${cat.amt}"></td>
+          </tr>`;
+        });
+      }
+
+      html += `<tr>
+        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">TOTAL — ${escapeHtml(bucket.name)}</td>
+        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:right;">${formatDollar(bucket.total)}</td>
+        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">${bucket.pct_income.toFixed(1)}%</td>
+        <td style="background:#2c3e50;color:white;"></td>
+      </tr>`;
+      html += `<tr class="spacer-row"><td colspan="4"></td></tr>`;
+    });
+
+    html += `<tr class="spacer-row"><td colspan="4"></td></tr>`;
+    html += `<tr><td colspan="4" style="background:#1a5276;color:white;font-weight:bold;font-size:13px;text-align:center;padding:10px;">─── GRAND REVEAL ───</td></tr>`;
+    html += `<tr style="background:#1a5276;color:white;font-size:11px;font-weight:bold;text-align:center;">
+      <td>Bucket</td><td>Avg Monthly ($)</td><td>% of Spending</td><td>% of Income</td>
+    </tr>`;
+    data.grand_reveal.forEach(row => {
+      html += `<tr style="text-align:center;font-weight:bold;">
+        <td>${escapeHtml(row.name.toUpperCase())}</td>
+        <td>${formatDollar(row.total)}</td>
+        <td>${row.pct_spending.toFixed(1)}%</td>
+        <td>${row.pct_income.toFixed(1)}%</td>
+      </tr>`;
+    });
+    html += `<tr style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">
+      <td>TOTAL SPENDING</td>
+      <td>${formatDollar(data.total_spending)}</td>
+      <td>100.0%</td>
+      <td>${data.total_pct_income.toFixed(1)}%</td>
+    </tr>`;
+    html += `</table>`;
+
+    document.getElementById("table-container").innerHTML = html;
+    attachEditListeners();
+    attachSliderListeners();
+    renderPieChart(data);
+  }
+
+  let pieChartInstance = null;
+
+  function renderPieChart(data) {
+    const totalSpending = data.total_spending || 1;
+    const labels = data.buckets.map(b => b.name);
+    const values = data.buckets.map(b => b.total);
+    const colors = data.buckets.map(b => BUCKET_COLORS[b.name] || "#ccc");
+    const borderColors = ["#2980b9", "#27ae60", "#f39c12"];
+
+    document.getElementById("pie-container").classList.remove("hidden");
+
+    if (pieChartInstance) {
+      pieChartInstance.destroy();
+    }
+
+    pieChartInstance = new Chart(document.getElementById("pie-chart"), {
+      type: "pie",
+      data: {
+        labels: labels.map((l, i) => `${l} — ${((values[i] / totalSpending) * 100).toFixed(1)}%`),
+        datasets: [{
+          data: values,
+          backgroundColor: colors,
+          borderColor: borderColors,
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { position: "bottom", labels: { font: { family: "Arial", size: 13 } } },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` ${formatDollar(ctx.parsed)} (${((ctx.parsed / totalSpending) * 100).toFixed(1)}%)`
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function attachEditListeners() {
+    document.querySelectorAll(".preview-table .editable").forEach(cell => {
+      cell.addEventListener("focus", function () {
+        if (this.dataset.field === "amt") {
+          this.textContent = this.dataset.raw;
+          const range = document.createRange();
+          range.selectNodeContents(this);
+          range.collapse(false);
+          window.getSelection().removeAllRanges();
+          window.getSelection().addRange(range);
+        }
+      });
+      cell.addEventListener("blur", function () {
+        if (this.dataset.field === "amt") {
+          const val = parseFloat(this.textContent.replace(/[^0-9.-]/g, "")) || 0;
+          this.dataset.raw = val;
+          this.textContent = formatDollar(val);
+        }
+        markDirty(this);
+      });
+    });
+  }
+
+  function markDirty(cell) {
+    cell.classList.add("edited");
+  }
+
+  // ── What If mode ─────────────────────────────────────────────────────────
+  let whatIfActive = false;
+
+  function toggleWhatIf() {
+    whatIfActive = !whatIfActive;
+    const btn = document.getElementById("whatif-btn");
+    const table = document.querySelector(".preview-table");
+    btn.classList.toggle("active", whatIfActive);
+    table.classList.toggle("whatif-active", whatIfActive);
+  }
+
+  function attachSliderListeners() {
+    document.querySelectorAll(".preview-table .whatif-slider").forEach(slider => {
+      slider.addEventListener("input", function () {
+        const val = parseFloat(this.value);
+        const row = this.closest(".cat-data-row");
+        const amtCell = row.querySelector("[data-field='amt']");
+        amtCell.dataset.raw = val;
+
+        // Update displayed amount
+        amtCell.textContent = formatDollar(val);
+
+        // Update % of income in this row
+        const income = tableData.income;
+        const pct = income ? ((val / income) * 100).toFixed(1) : "0.0";
+        row.querySelector(".cat-pct").textContent = pct + "%";
+
+        // Recalculate bucket total row
+        const bucket = row.dataset.bucket;
+        let bucketTotal = 0;
+        document.querySelectorAll(`.cat-data-row[data-bucket="${bucket}"]`).forEach(r => {
+          bucketTotal += parseFloat(r.querySelector("[data-field='amt']").dataset.raw) || 0;
+        });
+
+        // Find and update the TOTAL row for this bucket
+        const allRows = Array.from(document.querySelectorAll(".preview-table tr"));
+        const totalLabel = `TOTAL — ${bucket}`;
+        allRows.forEach(r => {
+          const firstTd = r.querySelector("td");
+          if (firstTd && firstTd.textContent.trim() === totalLabel) {
+            const cells = r.querySelectorAll("td");
+            cells[1].textContent = formatDollar(bucketTotal);
+            cells[2].textContent = income ? ((bucketTotal / income) * 100).toFixed(1) + "%" : "0.0%";
+          }
+        });
+
+        // Recalculate grand reveal
+        const allBuckets = {};
+        document.querySelectorAll(".preview-table .cat-data-row").forEach(r => {
+          const b = r.dataset.bucket;
+          if (!allBuckets[b]) allBuckets[b] = 0;
+          allBuckets[b] += parseFloat(r.querySelector("[data-field='amt']").dataset.raw) || 0;
+        });
+        const totalSpending = Object.values(allBuckets).reduce((a, b) => a + b, 0);
+
+        allRows.forEach(r => {
+          const firstTd = r.querySelector("td");
+          if (!firstTd) return;
+          const label = firstTd.textContent.trim();
+
+          Object.keys(allBuckets).forEach(b => {
+            if (label === b.toUpperCase()) {
+              const cells = r.querySelectorAll("td");
+              cells[1].textContent = formatDollar(allBuckets[b]);
+              cells[2].textContent = totalSpending ? ((allBuckets[b] / totalSpending) * 100).toFixed(1) + "%" : "0.0%";
+              cells[3].textContent = income ? ((allBuckets[b] / income) * 100).toFixed(1) + "%" : "0.0%";
+            }
+          });
+
+          if (label === "TOTAL SPENDING") {
+            const cells = r.querySelectorAll("td");
+            cells[1].textContent = formatDollar(totalSpending);
+            cells[3].textContent = income ? ((totalSpending / income) * 100).toFixed(1) + "%" : "0.0%";
+          }
+        });
+      });
+    });
+  }
+
+  // ── Trends ───────────────────────────────────────────────────────────────
+  let trendsActive = false;
+
+  function toggleTrends() {
+    trendsActive = !trendsActive;
+    document.getElementById("trends-btn").classList.toggle("active", trendsActive);
+    document.getElementById("table-container").classList.toggle("hidden", trendsActive);
+    const tc = document.getElementById("trends-container");
+    if (trendsActive) {
+      tc.classList.remove("hidden");
+      renderTrends();
+    } else {
+      tc.classList.add("hidden");
+    }
+  }
+
+  function renderTrends() {
+    const { breakdown, months } = trendData;
+    const bucketOrder = ["Necessities", "Luxuries", "Future Self"];
+
+    let html = `<table class="preview-table">`;
+    html += `<tr><td colspan="${months.length + 1}" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">📊 Month-by-Month Trend</td></tr>`;
+
+    // Header row
+    html += `<tr style="font-weight:bold;text-align:center;background:#f0f2f5;">
+      <td style="text-align:left;">Category</td>
+      ${months.map(m => `<td>${m}</td>`).join("")}
+    </tr>`;
+
+    bucketOrder.forEach(bucket => {
+      const cats = Object.keys(breakdown).filter(cat =>
+        tableData.buckets.find(b => b.name === bucket && b.categories.find(c => c.name === cat))
+      );
+      if (cats.length === 0) return;
+
+      const color = BUCKET_COLORS[bucket] || "#f8f8f8";
+      html += `<tr><td colspan="${months.length + 1}" style="background:${color};font-weight:bold;font-size:13px;padding:8px;">▶ ${bucket.toUpperCase()}</td></tr>`;
+
+      cats.forEach(cat => {
+        const amts = months.map(m => breakdown[cat]?.[m] ?? 0);
+        html += `<tr>
+          <td style="background:${color};">${escapeHtml(cat)}</td>
+          ${amts.map(a => `<td style="background:${color};text-align:right;">${formatDollar(a)}</td>`).join("")}
+        </tr>`;
+      });
+    });
+
+    html += `</table>`;
+    document.getElementById("trends-container").innerHTML = html;
+  }
+
+  function showSaveOverlay() {
+    document.getElementById("save-overlay").classList.remove("hidden");
+  }
+
+  function confirmDiscard() {
+    document.getElementById("save-overlay").classList.add("hidden");
+    document.getElementById("save-msg").innerHTML = "";
+    renderTable(JSON.parse(JSON.stringify(originalTableData)));
+  }
+
+  async function confirmSave() {
+    document.getElementById("save-overlay").classList.add("hidden");
+    const msg = document.getElementById("save-msg");
+    msg.innerHTML = "";
+
+    const editedBuckets = {};
+    document.querySelectorAll(".preview-table .cat-data-row").forEach(row => {
+      const bucket = row.dataset.bucket;
+      if (!editedBuckets[bucket]) editedBuckets[bucket] = [];
+      const nameCell = row.querySelector("[data-field='name']");
+      const amtCell  = row.querySelector("[data-field='amt']");
+      const amt = parseFloat(String(amtCell.dataset.raw || amtCell.textContent).replace(/[^0-9.-]/g, "")) || 0;
+      editedBuckets[bucket].push({ name: nameCell.textContent.trim(), amt });
+    });
+
+    try {
+      const res  = await fetch("/save", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ income: tableData.income, buckets: editedBuckets })
+      });
+      const data = await res.json();
+
+      if (data.error) {
+        msg.innerHTML = `<div class="msg msg-error">❌ ${data.error}</div>`;
+        return;
+      }
+
+      originalTableData = JSON.parse(JSON.stringify(data.table));
+      renderTable(data.table);
+      msg.innerHTML = `<div class="msg msg-success">✅ Changes saved and report regenerated.</div>`;
+    } catch (e) {
+      msg.innerHTML = `<div class="msg msg-error">❌ ${e.message}</div>`;
+    }
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function formatDollar(n) {
+    return "$" + Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+
+  function resetApp() {
+    location.reload();
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,481 @@
+import os
+import secrets
+from flask import Flask, render_template, request, jsonify, send_file, session, after_this_request
+from openpyxl import load_workbook, Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+import tempfile
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+
+ALL_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+              "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+
+# Column-A labels that are structural dividers, not spendable categories.
+# Matched with startswith so partial labels like "EXPENSES BY D.A." are caught.
+_SKIP_PREFIXES = ("ATM WITHDRAWALS", "EXPENSES")
+
+BUCKET_LABELS = ["Necessities", "Luxuries", "Future Self"]
+
+
+def _find_totals_col(ws):
+    """Return the column index of the TOTALS header in row 1, or None.
+    Matches 'Total', 'TOTALS', 'total', etc. case-insensitively."""
+    for cell in ws[1]:
+        if cell.value and str(cell.value).strip().upper().startswith("TOTAL"):
+            return cell.column
+    return None
+
+
+def _is_category_header(cell):
+    """True if the cell looks like a top-level category header: bold + distinctly colored fill.
+    Excludes white and near-white fills used for alternating sub-item rows."""
+    if not cell.value:
+        return False
+    if not (cell.font and cell.font.bold):
+        return False
+    fill = cell.fill
+    if fill.fill_type != "solid":
+        return False
+    fg = fill.fgColor
+    # Exclude transparent, white, and near-white alternating row fills
+    _EXCLUDED_COLORS = {"00000000", "FFFFFFFF", "FFF3F3F3"}
+    if fg.type == "theme":
+        return True
+    return fg.rgb not in _EXCLUDED_COLORS
+
+
+def _sum_col(ws, row_start, row_end, col):
+    """Sum numeric values in a single column over a row range."""
+    total = 0.0
+    for (val,) in ws.iter_rows(min_row=row_start, max_row=row_end,
+                                min_col=col, max_col=col, values_only=True):
+        if isinstance(val, (int, float)):
+            total += val
+    return round(total, 2)
+
+
+def extract_data(filepath):
+    """Dynamically detect months and categories from the uploaded workbook."""
+    wb = load_workbook(filepath, data_only=True)
+    # Build a map of stripped name -> actual sheet name to handle trailing spaces
+    sheet_name_map = {s.strip(): s for s in wb.sheetnames}
+    months = [m for m in ALL_MONTHS if m in sheet_name_map]
+
+    results = {}
+    ordered_cats = []   # category names in sheet order, set from the first month
+
+    for month in months:
+        ws = wb[sheet_name_map[month]]
+        totals_col = _find_totals_col(ws)
+        if totals_col is None:
+            continue
+
+        # Scan column A for all bold + colored header rows
+        headers = []
+        for row_idx in range(1, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=1)
+            if _is_category_header(cell):
+                headers.append((row_idx, str(cell.value).strip()))
+
+        month_data = {"income": 0.0}
+        cat_order_this_month = []
+
+        for i, (row_idx, name) in enumerate(headers):
+            data_start = row_idx + 1
+            data_end = (headers[i + 1][0] - 1) if i + 1 < len(headers) else ws.max_row
+            name_upper = name.upper()
+
+            if "TOTAL" in name_upper or any(name_upper.startswith(p) for p in _SKIP_PREFIXES):
+                continue
+
+            total = _sum_col(ws, data_start, data_end, totals_col)
+
+            if "INCOME" in name_upper:
+                month_data["income"] = total
+            else:
+                month_data[name] = total
+                cat_order_this_month.append(name)
+
+        if not ordered_cats:
+            ordered_cats = cat_order_this_month
+
+        results[month] = month_data
+
+    return results, ordered_cats
+
+
+def compute_averages(monthly_data, selected_months=None):
+    """Average income and each category across selected months.
+    If selected_months is None, defaults to all active months (income > 0)."""
+    if selected_months:
+        active_months = [m for m in selected_months if m in monthly_data]
+    else:
+        active_months = [m for m, data in monthly_data.items() if data.get("income", 0) > 0]
+    n = len(active_months)
+    if n == 0:
+        return {}
+
+    keys = list(next(iter(monthly_data.values())).keys())
+    averages = {}
+    for k in keys:
+        total = sum(monthly_data[m].get(k, 0) for m in active_months)
+        averages[k] = round(total / n, 2)
+    return averages
+
+
+def build_output_xlsx(averages, assignments):
+    """
+    Build the clean 3-bucket output spreadsheet.
+    assignments = { category_name: bucket_label, ... }
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Awareness Engine"
+
+    # ── Styles ────────────────────────────────────────────────────────────────
+    bucket_font   = Font(name="Arial", bold=True, size=12)
+    label_font    = Font(name="Arial", size=11)
+    pct_font      = Font(name="Arial", bold=True, size=12)
+    total_font    = Font(name="Arial", bold=True, size=11)
+
+    nec_fill  = PatternFill("solid", start_color="D6EAF8")   # light blue
+    lux_fill  = PatternFill("solid", start_color="D5F5E3")   # light green
+    fs_fill   = PatternFill("solid", start_color="FEF9E7")   # light yellow
+    title_fill = PatternFill("solid", start_color="2C3E50")
+    title_font = Font(name="Arial", bold=True, size=14, color="FFFFFF")
+
+    center = Alignment(horizontal="center", vertical="center")
+    left   = Alignment(horizontal="left",   vertical="center")
+    right  = Alignment(horizontal="right",  vertical="center")
+
+    thin = Side(style="thin", color="AAAAAA")
+    border = Border(top=thin, left=thin, right=thin, bottom=thin)
+
+    def style(cell, font=None, fill=None, align=None, num_fmt=None):
+        if font:   cell.font      = font
+        if fill:   cell.fill      = fill
+        if align:  cell.alignment = align
+        if num_fmt: cell.number_format = num_fmt
+        cell.border = border
+
+    # ── Column widths ─────────────────────────────────────────────────────────
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 16
+
+    # ── Title row ─────────────────────────────────────────────────────────────
+    ws.merge_cells("A1:C1")
+    ws["A1"] = "THE AWARENESS ENGINE — My Financial Reality"
+    style(ws["A1"], font=title_font, fill=title_fill, align=center)
+    ws.row_dimensions[1].height = 30
+
+    # ── Income row ────────────────────────────────────────────────────────────
+    ws.row_dimensions[2].height = 6   # spacer
+    ws["A3"] = "Average Monthly Income"
+    ws["B3"] = averages.get("income", 0)
+    ws["C3"] = "100%"
+    style(ws["A3"], font=total_font, align=left)
+    style(ws["B3"], font=total_font, align=right, num_fmt='"$"#,##0.00')
+    style(ws["C3"], font=pct_font,   align=center)
+    ws.row_dimensions[3].height = 22
+
+    ws.row_dimensions[4].height = 8   # spacer
+
+    # ── Bucket colours map ────────────────────────────────────────────────────
+    bucket_fill = {
+        "Necessities":  nec_fill,
+        "Luxuries":     lux_fill,
+        "Future Self":  fs_fill,
+    }
+
+    # ── Group categories by bucket ────────────────────────────────────────────
+    buckets = {b: [] for b in BUCKET_LABELS}
+    for cat, bucket in assignments.items():
+        if bucket in buckets:
+            buckets[bucket].append(cat)
+
+    income = averages.get("income", 1) or 1   # avoid div/0
+    total_fill = PatternFill("solid", start_color="2C3E50")
+    total_white = Font(name="Arial", bold=True, size=11, color="FFFFFF")
+    current_row = 5
+
+    for bucket_name in BUCKET_LABELS:
+        cats = buckets[bucket_name]
+        fill = bucket_fill[bucket_name]
+
+        # Bucket header
+        ws.merge_cells(f"A{current_row}:C{current_row}")
+        ws[f"A{current_row}"] = f"▶  {bucket_name.upper()}"
+        style(ws[f"A{current_row}"], font=bucket_font, fill=fill, align=left)
+        ws.row_dimensions[current_row].height = 24
+        current_row += 1
+
+        # Column sub-headers
+        ws[f"A{current_row}"] = "Category"
+        ws[f"B{current_row}"] = "Avg Monthly ($)"
+        ws[f"C{current_row}"] = "% of Income"
+        for col in ["A", "B", "C"]:
+            style(ws[f"{col}{current_row}"], font=Font(name="Arial", bold=True, size=10),
+                  fill=fill, align=center)
+        ws.row_dimensions[current_row].height = 18
+        current_row += 1
+
+        # Category rows — track which rows hold the $ amounts for SUM formula
+        data_start = current_row
+        if not cats:
+            ws[f"A{current_row}"] = "(No categories assigned)"
+            ws[f"B{current_row}"] = 0
+            ws[f"C{current_row}"] = "0.0%"
+            for col in ["A", "B", "C"]:
+                style(ws[f"{col}{current_row}"], font=label_font, fill=fill, align=left)
+            current_row += 1
+        else:
+            for cat in cats:
+                amt = averages.get(cat, 0)
+                pct = (amt / income) * 100 if income else 0
+                ws[f"A{current_row}"] = cat
+                ws[f"B{current_row}"] = amt
+                ws[f"C{current_row}"] = f"{pct:.1f}%"
+                style(ws[f"A{current_row}"], font=label_font, fill=fill, align=left)
+                style(ws[f"B{current_row}"], font=label_font, fill=fill,
+                      align=right, num_fmt='"$"#,##0.00')
+                style(ws[f"C{current_row}"], font=label_font, fill=fill, align=center)
+                ws.row_dimensions[current_row].height = 20
+                current_row += 1
+
+        data_end = current_row - 1
+
+        # Bucket TOTAL row
+        bucket_total_amt = sum(averages.get(c, 0) for c in cats)
+        bucket_pct = (bucket_total_amt / income) * 100 if income else 0
+        ws[f"A{current_row}"] = f"TOTAL — {bucket_name}"
+        ws[f"B{current_row}"] = f"=SUM(B{data_start}:B{data_end})"
+        ws[f"C{current_row}"] = f"{bucket_pct:.1f}%"
+        for col in ["A", "B", "C"]:
+            style(ws[f"{col}{current_row}"], font=total_white, fill=total_fill, align=center)
+        ws[f"B{current_row}"].number_format = '"$"#,##0.00'
+        ws.row_dimensions[current_row].height = 22
+        current_row += 2   # spacer after each bucket
+
+    # ── Grand summary rows ────────────────────────────────────────────────────
+    ws.column_dimensions["D"].width = 16   # % of Income column
+
+    current_row += 1
+    ws.merge_cells(f"A{current_row}:D{current_row}")
+    ws[f"A{current_row}"] = "─── GRAND REVEAL ───"
+    style(ws[f"A{current_row}"], font=Font(name="Arial", bold=True, size=12,
+          color="FFFFFF"), fill=PatternFill("solid", start_color="1A5276"), align=center)
+    ws.row_dimensions[current_row].height = 24
+    current_row += 1
+
+    # Grand Reveal column headers
+    reveal_fill = PatternFill("solid", start_color="1A5276")
+    for col, label in [("A", "Bucket"), ("B", "Avg Monthly ($)"),
+                        ("C", "% of Spending"), ("D", "% of Income")]:
+        ws[f"{col}{current_row}"] = label
+        style(ws[f"{col}{current_row}"], fill=reveal_fill, align=center)
+        ws[f"{col}{current_row}"].font = Font(name="Arial", bold=True, size=10, color="FFFFFF")
+    ws.row_dimensions[current_row].height = 18
+    current_row += 1
+
+    left_out = {cat for cat, b in assignments.items() if b == "Leave Out"}
+    all_spent = sum(v for k, v in averages.items() if k != "income" and k not in left_out)
+
+    for bucket_name in BUCKET_LABELS:
+        cats = buckets[bucket_name]
+        bucket_total = sum(averages.get(c, 0) for c in cats)
+        pct_spending = (bucket_total / all_spent) * 100 if all_spent else 0
+        pct_income   = (bucket_total / income)    * 100 if income    else 0
+        ws[f"A{current_row}"] = bucket_name.upper()
+        ws[f"B{current_row}"] = bucket_total
+        ws[f"C{current_row}"] = f"{pct_spending:.1f}%"
+        ws[f"D{current_row}"] = f"{pct_income:.1f}%"
+        for col in ["A", "B", "C", "D"]:
+            style(ws[f"{col}{current_row}"],
+                  font=Font(name="Arial", bold=True, size=11), align=center)
+        ws[f"B{current_row}"].number_format = '"$"#,##0.00'
+        ws.row_dimensions[current_row].height = 22
+        current_row += 1
+
+    # Total spending summary row
+    ws[f"A{current_row}"] = "TOTAL SPENDING"
+    ws[f"B{current_row}"] = all_spent
+    ws[f"C{current_row}"] = "100.0%"
+    ws[f"D{current_row}"] = f"{(all_spent / income * 100):.1f}%" if income else "0.0%"
+    dark_fill = PatternFill("solid", start_color="2C3E50")
+    white_bold = Font(name="Arial", bold=True, size=11, color="FFFFFF")
+    for col in ["A", "B", "C", "D"]:
+        style(ws[f"{col}{current_row}"], font=white_bold, fill=dark_fill, align=center)
+    ws[f"B{current_row}"].number_format = '"$"#,##0.00'
+    ws.row_dimensions[current_row].height = 22
+
+    # ── Save to temp file ─────────────────────────────────────────────────────
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    wb.save(tmp.name)
+    return tmp.name
+
+
+def build_table_data(averages, assignments):
+    """Build structured table data for frontend rendering."""
+    income = averages.get("income", 0)
+    left_out = {cat for cat, b in assignments.items() if b == "Leave Out"}
+
+    buckets_out = []
+    for bucket_name in BUCKET_LABELS:
+        cats = [cat for cat, b in assignments.items() if b == bucket_name]
+        categories = [{"name": cat, "amt": round(averages.get(cat, 0), 2)} for cat in cats]
+        bucket_total = round(sum(c["amt"] for c in categories), 2)
+        pct_income = round((bucket_total / income * 100), 1) if income else 0.0
+        buckets_out.append({
+            "name": bucket_name,
+            "categories": categories,
+            "total": bucket_total,
+            "pct_income": pct_income
+        })
+
+    all_spent = round(sum(v for k, v in averages.items()
+                          if k != "income" and k not in left_out), 2)
+
+    grand_reveal = []
+    for b in buckets_out:
+        grand_reveal.append({
+            "name": b["name"],
+            "total": b["total"],
+            "pct_spending": round((b["total"] / all_spent * 100), 1) if all_spent else 0.0,
+            "pct_income": b["pct_income"]
+        })
+
+    return {
+        "income": round(income, 2),
+        "buckets": buckets_out,
+        "grand_reveal": grand_reveal,
+        "total_spending": all_spent,
+        "total_pct_income": round((all_spent / income * 100), 1) if income else 0.0
+    }
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    f = request.files["file"]
+    if not f.filename.endswith(".xlsx"):
+        return jsonify({"error": "Please upload a .xlsx file"}), 400
+
+    # Save upload to temp
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    f.save(tmp.name)
+
+    try:
+        monthly_data, category_names = extract_data(tmp.name)
+        session["monthly_data"] = monthly_data
+        averages = compute_averages(monthly_data)
+
+        categories = [{"name": n, "avg": averages.get(n, 0)} for n in category_names]
+
+        return jsonify({
+            "income": averages.get("income", 0),
+            "categories": categories,
+            "months_found": list(monthly_data.keys())
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        os.unlink(tmp.name)
+
+
+@app.route("/generate", methods=["POST"])
+def generate():
+    data = request.get_json()
+    assignments = data.get("assignments", {})  # { cat_name: bucket_label }
+    selected_months = data.get("selected_months", None)
+
+    monthly_data = session.get("monthly_data")
+    if not monthly_data:
+        return jsonify({"error": "No data in session. Please upload your file again."}), 400
+
+    averages = compute_averages(monthly_data, selected_months)
+    if not averages:
+        return jsonify({"error": "No data found for the selected months."}), 400
+
+    try:
+        output_path = build_output_xlsx(averages, assignments)
+        session["output_path"] = output_path
+        session["assignments"] = assignments
+
+        # Build month-by-month breakdown for trend view
+        active_months = selected_months if selected_months else \
+            [m for m, d in monthly_data.items() if d.get("income", 0) > 0]
+        monthly_breakdown = {
+            cat: {m: round(monthly_data[m].get(cat, 0), 2) for m in active_months}
+            for cat, bucket in assignments.items()
+            if bucket not in ("Leave Out",) and bucket in BUCKET_LABELS
+        }
+
+        return jsonify({
+            "success": True,
+            "table": build_table_data(averages, assignments),
+            "monthly_breakdown": monthly_breakdown,
+            "trend_months": active_months
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/save", methods=["POST"])
+def save():
+    data = request.get_json()
+    income = float(data.get("income", 0))
+    buckets_input = data.get("buckets", {})   # { bucket_name: [{name, amt}, ...] }
+
+    averages = {"income": income}
+    assignments = {}
+    for bucket_name, cats in buckets_input.items():
+        for cat in cats:
+            averages[cat["name"]] = float(cat["amt"])
+            assignments[cat["name"]] = bucket_name
+
+    try:
+        old_path = session.get("output_path")
+        if old_path and os.path.exists(old_path):
+            os.unlink(old_path)
+
+        output_path = build_output_xlsx(averages, assignments)
+        session["output_path"] = output_path
+        session["averages"] = averages
+        session["assignments"] = assignments
+        return jsonify({"success": True, "table": build_table_data(averages, assignments)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/download")
+def download():
+    output_path = session.get("output_path")
+    if not output_path or not os.path.exists(output_path):
+        return "No file ready. Please generate first.", 400
+
+    @after_this_request
+    def cleanup(response):
+        try:
+            os.unlink(output_path)
+            session.pop("output_path", None)
+        except Exception:
+            pass
+        return response
+
+    return send_file(output_path, as_attachment=True,
+                     download_name="Awareness_Engine_Results.xlsx")
+
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5050)
