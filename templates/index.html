@@ -4,14 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>SimplCalc "THEE AWARENESS ENGINE"</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: 'Inter', Arial, sans-serif;
-      background: #f0f2f5;
+      font-family: 'DM Sans', Arial, sans-serif;
+      background: #f4f4f1;
       color: #1a1a1a;
       padding: 20px;
       padding-top: 60px;
@@ -27,7 +27,7 @@
       background: linear-gradient(135deg, #0f1f3d, #1a3a5c);
       color: white;
       padding: 24px;
-      border-radius: 8px;
+      border-radius: 14px;
       margin-bottom: 20px;
       text-align: center;
       box-shadow: 0 4px 16px rgba(0,0,0,0.15);
@@ -38,12 +38,11 @@
     /* ── Cards ──────────────────────────────────────────── */
     .card {
       background: white;
-      border-radius: 8px;
+      border-radius: 14px;
       padding: 24px;
       margin-bottom: 20px;
-      border: 1px solid #dde;
-      border-top: 3px solid #00bcd4;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+      border: 1px solid #e8e8e4;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
     }
     .card h2 {
       font-size: 16px;
@@ -70,7 +69,7 @@
     /* ── Upload area ────────────────────────────────────── */
     .upload-box {
       border: 2px dashed #aab;
-      border-radius: 6px;
+      border-radius: 12px;
       padding: 30px;
       text-align: center;
       cursor: pointer;
@@ -89,9 +88,9 @@
       border: none;
       padding: 12px 28px;
       font-size: 14px;
-      font-family: 'Inter', Arial, sans-serif;
+      font-family: 'DM Sans', Arial, sans-serif;
       font-weight: 600;
-      border-radius: 6px;
+      border-radius: 10px;
       cursor: pointer;
       transition: background 0.2s, transform 0.1s;
       letter-spacing: 0.2px;
@@ -99,13 +98,12 @@
     button:hover   { background: #00bcd4; }
     button:active  { transform: scale(0.98); }
     button:disabled { background: #aaa; cursor: not-allowed; }
-    .btn-green:hover { background: #00bcd4; }
 
     /* ── Income display ─────────────────────────────────── */
     .income-box {
       background: #eaf4fb;
       border: 1px solid #aed6f1;
-      border-radius: 6px;
+      border-radius: 10px;
       padding: 14px 20px;
       font-size: 15px;
       margin-bottom: 16px;
@@ -142,9 +140,9 @@
     }
     .choice-btn:hover { border-color: #0f1f3d; color: #0f1f3d; }
 
-    .choice-btn.selected-Necessities  { background: #d6eaf8; border-color: #2980b9; color: #1a5276; }
-    .choice-btn.selected-Luxuries     { background: #d5f5e3; border-color: #27ae60; color: #145a32; }
-    .choice-btn.selected-FutureSelf   { background: #fef9e7; border-color: #f39c12; color: #7d6608; }
+    .choice-btn.selected-Necessities  { background: #dbeef7; border-color: #4fa8bc; color: #1a6878; }
+    .choice-btn.selected-Luxuries     { background: #daf2e5; border-color: #5fa87c; color: #1a6040; }
+    .choice-btn.selected-FutureSelf   { background: #fef0e0; border-color: #d47a56; color: #7a4020; }
     .choice-btn.selected-LeaveOut     { background: #f2f3f4; border-color: #95a5a6; color: #555; }
 
     /* ── Progress bar ───────────────────────────────────── */
@@ -166,7 +164,7 @@
     /* ── Messages ───────────────────────────────────────── */
     .msg {
       padding: 12px 16px;
-      border-radius: 6px;
+      border-radius: 10px;
       font-size: 14px;
       margin-top: 12px;
     }
@@ -200,7 +198,7 @@
     .preview-table {
       width: 100%;
       border-collapse: collapse;
-      font-family: 'Inter', Arial, sans-serif;
+      font-family: 'DM Sans', Arial, sans-serif;
       font-size: 13px;
     }
     .preview-table td {
@@ -215,7 +213,7 @@
     .preview-table .edited { background: #fffde7 !important; }
 
     /* ── What If sliders ─────────────────────────────────── */
-    .whatif-slider { width: 100%; margin-top: 4px; display: none; accent-color: #2980b9; }
+    .whatif-slider { width: 100%; margin-top: 4px; display: none; accent-color: #4fa8bc; }
     .whatif-active .whatif-slider { display: block; }
     .btn-whatif { background: #0f1f3d; }
     .btn-whatif:hover { background: #00bcd4; }
@@ -255,7 +253,7 @@
     }
     .overlay-box {
       background: white;
-      border-radius: 10px;
+      border-radius: 16px;
       padding: 36px 32px;
       text-align: center;
       max-width: 420px;
@@ -574,9 +572,9 @@
 
   // ── Table rendering ───────────────────────────────────────────────────────
   const BUCKET_COLORS = {
-    "Necessities": "#d6eaf8",
-    "Luxuries":    "#d5f5e3",
-    "Future Self": "#fef9e7"
+    "Necessities": "#dbeef7",
+    "Luxuries":    "#daf2e5",
+    "Future Self": "#fef0e0"
   };
 
   function escapeHtml(str) {
@@ -669,7 +667,7 @@
     const labels = data.buckets.map(b => b.name);
     const values = data.buckets.map(b => b.total);
     const colors = data.buckets.map(b => BUCKET_COLORS[b.name] || "#ccc");
-    const borderColors = ["#2980b9", "#27ae60", "#f39c12"];
+    const borderColors = ["#4fa8bc", "#5fa87c", "#d47a56"];
 
     document.getElementById("pie-container").classList.remove("hidden");
 
