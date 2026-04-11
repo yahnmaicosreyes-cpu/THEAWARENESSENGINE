@@ -6,6 +6,7 @@
   <title>SimplCalc "THEE AWARENESS ENGINE"</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -215,10 +216,8 @@
     /* ── What If sliders ─────────────────────────────────── */
     .whatif-slider { width: 100%; margin-top: 4px; display: none; accent-color: #4fa8bc; }
     .whatif-active .whatif-slider { display: block; }
-    .btn-whatif { background: #0f1f3d; }
     .btn-whatif:hover { background: #00bcd4; }
     .btn-whatif.active { background: #00bcd4; }
-    .btn-trends { background: #0f1f3d; }
     .btn-trends:hover { background: #00bcd4; }
     .btn-trends.active { background: #00bcd4; }
 
@@ -240,6 +239,32 @@
     .whatif-reset-btn:hover { background: #e74c3c; color: white; }
     #whatif-reset-all-btn { background: #c0392b; }
     #whatif-reset-all-btn:hover { background: #922b21; }
+
+    /* ── Slider bubble ──────────────────────────────────── */
+    .slider-wrap { position: relative; display: block; width: 100%; }
+    .slider-bubble {
+      position: absolute;
+      background: #0f1f3d;
+      color: white;
+      border-radius: 8px;
+      padding: 2px 7px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      transform: translateX(-50%);
+      top: -28px;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .slider-bubble::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 4px solid transparent;
+      border-top-color: #0f1f3d;
+    }
 
     /* ── Save overlay ────────────────────────────────────── */
     .overlay {
@@ -278,6 +303,177 @@
       margin-right: 8px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Budget Template Builder ─────────────────────────── */
+    .tmpl-income-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .tmpl-income-row label {
+      font-weight: 600;
+      font-size: 15px;
+      min-width: 160px;
+    }
+    .tmpl-income-row input {
+      border: 1.5px solid #d0d0cc;
+      border-radius: 8px;
+      padding: 7px 12px;
+      font-size: 15px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      width: 160px;
+    }
+    .tmpl-bucket {
+      border-radius: 12px;
+      border: 1.5px solid #e8e8e4;
+      margin-bottom: 18px;
+      overflow: hidden;
+    }
+    .tmpl-bucket-header {
+      padding: 10px 16px;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: .05em;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      background: #0f1f3d;
+      color: white;
+    }
+    .tmpl-bucket-header span:first-child {
+      grid-column: 2;
+      text-align: center;
+    }
+    .tmpl-bucket-pct {
+      grid-column: 3;
+      text-align: right;
+    }
+    .tmpl-bucket[data-bucket="Necessities"] .tmpl-row { background: #f0f8fc; }
+    .tmpl-bucket[data-bucket="Luxuries"]    .tmpl-row { background: #f0faf4; }
+    .tmpl-bucket[data-bucket="Future Self"] .tmpl-row { background: #fdf6ee; }
+    .tmpl-bucket table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .tmpl-bucket th {
+      background: #f4f4f1;
+      font-weight: 600;
+      font-size: 12px;
+      padding: 7px 12px;
+      text-align: center;
+      border-bottom: 1.5px solid #e8e8e4;
+    }
+    .tmpl-bucket th:first-child { text-align: left; }
+    .tmpl-row td {
+      padding: 6px 10px;
+      border-bottom: 1px solid rgba(0,0,0,0.05);
+      vertical-align: middle;
+    }
+    .tmpl-row input[type="text"] {
+      width: 100%;
+      border: 1.5px solid #d0d0cc;
+      border-radius: 7px;
+      padding: 5px 10px;
+      font-size: 13px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      background: white;
+    }
+    .tmpl-row input[type="number"] {
+      width: 100%;
+      border: 1.5px solid #d0d0cc;
+      border-radius: 7px;
+      padding: 5px 10px;
+      font-size: 13px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      background: white;
+      text-align: right;
+    }
+    .tmpl-remove-btn {
+      background: none;
+      border: none;
+      color: #c0392b;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 6px;
+      line-height: 1;
+    }
+    .tmpl-remove-btn:hover { background: #fdecea; }
+    .tmpl-subtotal {
+      text-align: right;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 8px 12px;
+      background: #f4f4f1;
+      border-top: 1.5px solid #e8e8e4;
+      color: #333;
+    }
+    .tmpl-add-btn {
+      background: none;
+      border: 1.5px dashed #aaa;
+      border-radius: 8px;
+      color: #777;
+      font-size: 13px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      cursor: pointer;
+      padding: 5px 14px;
+      margin: 0 12px 10px;
+      width: calc(100% - 24px);
+    }
+    .tmpl-add-btn:hover { border-color: #0f1f3d; color: #0f1f3d; background: #f4f4f1; }
+    .tmpl-dl-btn {
+      background: #0f1f3d;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 11px 28px;
+      font-size: 15px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    .tmpl-dl-btn:hover { background: #00bcd4; }
+    .tmpl-reveal {
+      margin: 20px 0 16px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1.5px solid #e8e8e4;
+    }
+    .tmpl-reveal-header {
+      background: #0f1f3d;
+      color: white;
+      text-align: center;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: .05em;
+      padding: 10px 16px;
+    }
+    .tmpl-reveal table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .tmpl-reveal th {
+      background: #f4f4f1;
+      font-weight: 600;
+      padding: 7px 12px;
+      text-align: center;
+      border-bottom: 1.5px solid #e8e8e4;
+    }
+    .tmpl-reveal th:first-child { text-align: left; }
+    .tmpl-reveal td {
+      padding: 7px 12px;
+      text-align: center;
+      border-bottom: 1px solid #f0f0ec;
+    }
+    .tmpl-reveal td:first-child { text-align: left; font-weight: 500; }
+    .tmpl-reveal tr:last-child td { border-bottom: none; font-weight: 700; background: #f4f4f1; }
+    .tmpl-reveal .reveal-nec { background: #f0f8fc; }
+    .tmpl-reveal .reveal-lux { background: #f0faf4; }
+    .tmpl-reveal .reveal-fs  { background: #fdf6ee; }
   </style>
 </head>
 <body>
@@ -308,6 +504,108 @@
       Scan My Spreadsheet
     </button>
     <div id="upload-msg"></div>
+  </div>
+
+  <div style="text-align:center;margin:8px 0 4px;">
+    <button id="tmpl-toggle-btn" onclick="toggleTemplateBuilder()">📋 Build My Own Budget</button>
+  </div>
+
+  <!-- Budget Template Builder -->
+  <div class="card hidden" id="template-card">
+    <h2>📋 Budget Template Builder</h2>
+    <p style="color:#666;font-size:14px;margin-bottom:20px;">Don't have a spreadsheet yet? Build one here — edit the categories, add your amounts, then download it as a ready-to-use .xlsx file.</p>
+
+    <div class="tmpl-income-row">
+      <label>Monthly Income ($)</label>
+      <input type="number" id="tmpl-income" placeholder="e.g. 4000" min="0" step="1" oninput="tmplRecalculate()">
+    </div>
+
+    <!-- Necessities -->
+    <div class="tmpl-bucket" data-bucket="Necessities">
+      <div class="tmpl-bucket-header">
+        <span>🏠 Necessities</span>
+        <span class="tmpl-bucket-pct" id="tmpl-pct-necessities">0%</span>
+      </div>
+      <table><thead><tr><th>Category</th><th style="text-align:right;">Amount ($)</th><th style="width:36px;"></th></tr></thead><tbody id="tmpl-rows-necessities"></tbody></table>
+      <div class="tmpl-subtotal">Subtotal: <span id="tmpl-sub-necessities">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmplAddRow('Necessities')">+ Add Category</button>
+    </div>
+
+    <!-- Luxuries -->
+    <div class="tmpl-bucket" data-bucket="Luxuries">
+      <div class="tmpl-bucket-header">
+        <span>✨ Luxuries</span>
+        <span class="tmpl-bucket-pct" id="tmpl-pct-luxuries">0%</span>
+      </div>
+      <table><thead><tr><th>Category</th><th style="text-align:right;">Amount ($)</th><th style="width:36px;"></th></tr></thead><tbody id="tmpl-rows-luxuries"></tbody></table>
+      <div class="tmpl-subtotal">Subtotal: <span id="tmpl-sub-luxuries">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmplAddRow('Luxuries')">+ Add Category</button>
+    </div>
+
+    <!-- Future Self -->
+    <div class="tmpl-bucket" data-bucket="Future Self">
+      <div class="tmpl-bucket-header">
+        <span>🚀 Future Self</span>
+        <span class="tmpl-bucket-pct" id="tmpl-pct-future-self">0%</span>
+      </div>
+      <table><thead><tr><th>Category</th><th style="text-align:right;">Amount ($)</th><th style="width:36px;"></th></tr></thead><tbody id="tmpl-rows-future-self"></tbody></table>
+      <div class="tmpl-subtotal">Subtotal: <span id="tmpl-sub-future-self">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmplAddRow('Future Self')">+ Add Category</button>
+    </div>
+
+    <!-- Grand Reveal -->
+    <div class="tmpl-reveal">
+      <div class="tmpl-reveal-header">⚡ Grand Reveal</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Bucket</th>
+            <th>Amount</th>
+            <th>% of Income</th>
+            <th>% of Spending</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="reveal-nec">
+            <td>🏠 Necessities</td>
+            <td id="gr-amt-necessities">$0.00</td>
+            <td id="gr-inc-necessities">0%</td>
+            <td id="gr-spd-necessities">0%</td>
+          </tr>
+          <tr class="reveal-lux">
+            <td>✨ Luxuries</td>
+            <td id="gr-amt-luxuries">$0.00</td>
+            <td id="gr-inc-luxuries">0%</td>
+            <td id="gr-spd-luxuries">0%</td>
+          </tr>
+          <tr class="reveal-fs">
+            <td>🚀 Future Self</td>
+            <td id="gr-amt-future-self">$0.00</td>
+            <td id="gr-inc-future-self">0%</td>
+            <td id="gr-spd-future-self">0%</td>
+          </tr>
+          <tr>
+            <td>Total Expenses</td>
+            <td id="gr-total-expenses">$0.00</td>
+            <td id="gr-total-pct-inc">0%</td>
+            <td>100%</td>
+          </tr>
+          <tr id="gr-remaining-row">
+            <td>💰 Remaining Income</td>
+            <td id="gr-remaining">$0.00</td>
+            <td id="gr-remaining-pct">0%</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="display:flex;justify-content:space-between;padding:10px 16px;font-size:13px;font-weight:600;background:#f4f4f1;border-top:1.5px solid #e8e8e4;">
+        <span>Total Income</span>
+        <span id="gr-total-income">$0.00</span>
+      </div>
+    </div>
+
+    <button class="tmpl-dl-btn" onclick="tmplDownload()">⬇ Download Template (.xlsx)</button>
+    <div id="tmpl-msg" style="margin-top:10px;font-size:13px;color:#c0392b;"></div>
   </div>
 
   <!-- STEP 2: Assign Categories -->
@@ -352,12 +650,12 @@
     </p>
     <div id="table-container"></div>
     <div id="trends-container" class="hidden"></div>
-    <div id="pie-container" class="hidden" style="max-width:380px;margin:20px auto 0;">
-      <canvas id="pie-chart"></canvas>
+    <div id="bar-container" class="hidden" style="max-width:560px;margin:20px auto 0;">
+      <canvas id="bar-chart"></canvas>
     </div>
     <div style="display:flex; gap:12px; margin-top:16px; align-items:center; justify-content:center; flex-wrap:nowrap;">
       <a href="/download">
-        <button class="btn-green">⬇ Download .xlsx</button>
+        <button>⬇ Download .xlsx</button>
       </a>
       <button id="save-btn" onclick="showSaveOverlay()">💾 Save Changes</button>
       <button id="whatif-btn" class="btn-whatif" onclick="toggleWhatIf()">🔮 What If Mode</button>
@@ -375,13 +673,15 @@
     <h3>Save Changes?</h3>
     <p>Save your edits and regenerate the report, or discard and revert to the last saved version.</p>
     <div class="overlay-actions">
-      <button class="btn-green" onclick="confirmSave()">✅ Save</button>
+      <button onclick="confirmSave()">✅ Save</button>
       <button class="btn-red" onclick="confirmDiscard()">✖ Discard</button>
     </div>
   </div>
 </div>
 
 <script>
+  Chart.register(ChartDataLabels);
+
   // ── State ─────────────────────────────────────────────────────────────────
   let selectedFile      = null;
   let categories        = [];           // [{ name, avg }]
@@ -619,7 +919,7 @@
             <td class="editable" contenteditable="true" style="background:${color};" data-field="name">${escapeHtml(cat.name)}</td>
             <td class="editable" contenteditable="true" style="background:${color};text-align:right;" data-field="amt" data-raw="${cat.amt}">${formatDollar(cat.amt)}</td>
             <td class="cat-pct" style="background:${color};text-align:center;">${pct}%</td>
-            <td style="background:${color};white-space:nowrap;"><input type="range" class="whatif-slider" min="0" max="${cat.amt * 2 || 1000}" step="1" value="${cat.amt}" data-original="${cat.amt}"><button class="whatif-reset-btn hidden" onclick="resetSlider(this)" title="Reset to original">↺</button></td>
+            <td style="background:${color};"><div class="slider-wrap"><span class="slider-bubble hidden"></span><input type="range" class="whatif-slider" min="0" max="${cat.amt * 2 || 1000}" step="1" value="${cat.amt}" data-original="${cat.amt}"><button class="whatif-reset-btn hidden" onclick="resetSlider(this)" title="Reset to original">↺</button></div></td>
           </tr>`;
         });
       }
@@ -652,48 +952,82 @@
       <td>100.0%</td>
       <td>${data.total_pct_income.toFixed(1)}%</td>
     </tr>`;
+    const remaining = data.income - data.total_spending;
+    const remainingPct = data.income > 0 ? ((remaining / data.income) * 100).toFixed(1) : "0.0";
+    const remColor = remaining < 0 ? "#c0392b" : "#145a32";
+    const remBg   = remaining < 0 ? "#FDECEA"  : "#D5F5E3";
+    html += `<tr style="background:${remBg};color:${remColor};font-weight:bold;text-align:center;">
+      <td>💰 Remaining Income</td>
+      <td>${formatDollar(remaining)}</td>
+      <td>—</td>
+      <td>${remainingPct}%</td>
+    </tr>`;
     html += `</table>`;
 
     document.getElementById("table-container").innerHTML = html;
     attachEditListeners();
     attachSliderListeners();
-    renderPieChart(data);
+    renderBarChart(data);
   }
 
-  let pieChartInstance = null;
+  let barChartInstance = null;
 
-  function renderPieChart(data) {
+  function renderBarChart(data) {
     const totalSpending = data.total_spending || 1;
     const labels = data.buckets.map(b => b.name);
     const values = data.buckets.map(b => b.total);
+    const pcts = data.buckets.map(b => parseFloat(((b.total / totalSpending) * 100).toFixed(1)));
     const colors = data.buckets.map(b => BUCKET_COLORS[b.name] || "#ccc");
     const borderColors = ["#4fa8bc", "#5fa87c", "#d47a56"];
 
-    document.getElementById("pie-container").classList.remove("hidden");
+    document.getElementById("bar-container").classList.remove("hidden");
 
-    if (pieChartInstance) {
-      pieChartInstance.destroy();
+    if (barChartInstance) {
+      barChartInstance.destroy();
     }
 
-    pieChartInstance = new Chart(document.getElementById("pie-chart"), {
-      type: "pie",
+    barChartInstance = new Chart(document.getElementById("bar-chart"), {
+      type: "bar",
       data: {
-        labels: labels.map((l, i) => `${l} — ${((values[i] / totalSpending) * 100).toFixed(1)}%`),
+        labels: labels,
         datasets: [{
-          data: values,
+          data: pcts,
           backgroundColor: colors,
           borderColor: borderColors,
-          borderWidth: 2
+          borderWidth: 2,
+          borderRadius: 6
         }]
       },
       options: {
         responsive: true,
         plugins: {
-          legend: { position: "bottom", labels: { font: { family: "Arial", size: 13 } } },
+          legend: { display: false },
+          datalabels: {
+            anchor: 'end',
+            align: 'top',
+            formatter: val => val + '%',
+            font: { family: 'DM Sans', size: 13, weight: '600' },
+            color: '#333'
+          },
           tooltip: {
             callbacks: {
-              label: ctx => ` ${formatDollar(ctx.parsed)} (${((ctx.parsed / totalSpending) * 100).toFixed(1)}%)`
+              label: ctx => ` ${ctx.parsed.y}% — ${formatDollar(values[ctx.dataIndex])}`
             }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            max: 100,
+            ticks: {
+              font: { family: "DM Sans", size: 12 },
+              callback: val => val + "%"
+            },
+            grid: { color: "#ebebeb" }
+          },
+          x: {
+            ticks: { font: { family: "DM Sans", size: 13, weight: "600" } },
+            grid: { display: false }
           }
         }
       }
@@ -808,6 +1142,14 @@
           }
         });
 
+        // Update bubble position and content
+        const bubble = this.closest(".slider-wrap")?.querySelector(".slider-bubble");
+        if (bubble) {
+          const pos = (this.value - this.min) / (this.max - this.min);
+          bubble.style.left = `calc(${pos * 100}% + ${8 - pos * 16}px)`;
+          bubble.textContent = pct + "%";
+        }
+
         // Show/hide per-slider reset button
         const resetBtn = this.closest("td").querySelector(".whatif-reset-btn");
         if (resetBtn) {
@@ -815,6 +1157,23 @@
             parseFloat(this.value) === parseFloat(this.dataset.original));
         }
         updateWhatIfResetAll();
+      });
+
+      slider.addEventListener("pointerdown", function () {
+        const bubble = this.closest(".slider-wrap")?.querySelector(".slider-bubble");
+        if (bubble) {
+          const income = tableData ? tableData.income : 0;
+          const pct = income ? ((parseFloat(this.value) / income) * 100).toFixed(1) : "0.0";
+          const pos = (this.value - this.min) / (this.max - this.min);
+          bubble.style.left = `calc(${pos * 100}% + ${8 - pos * 16}px)`;
+          bubble.textContent = pct + "%";
+          bubble.classList.remove("hidden");
+        }
+      });
+
+      slider.addEventListener("pointerup", function () {
+        const bubble = this.closest(".slider-wrap")?.querySelector(".slider-bubble");
+        if (bubble) bubble.classList.add("hidden");
       });
     });
   }
@@ -868,7 +1227,7 @@
     html += `<tr><td colspan="${months.length + 1}" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">📊 Month-by-Month Trend</td></tr>`;
 
     // Header row
-    html += `<tr style="font-weight:bold;text-align:center;background:#f0f2f5;">
+    html += `<tr style="font-weight:bold;text-align:center;background:#f4f4f1;">
       <td style="text-align:left;">Category</td>
       ${months.map(m => `<td>${m}</td>`).join("")}
     </tr>`;
@@ -943,12 +1302,123 @@
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function formatDollar(n) {
-    return "$" + Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    const abs = Math.abs(Number(n));
+    const s = "$" + abs.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return n < 0 ? "-" + s : s;
   }
 
   function resetApp() {
     location.reload();
   }
+
+  // ── Budget Template Builder ───────────────────────────────────────────────
+  function toggleTemplateBuilder() {
+    const card = document.getElementById("template-card");
+    const btn  = document.getElementById("tmpl-toggle-btn");
+    const isHidden = card.classList.toggle("hidden");
+    btn.textContent = isHidden ? "📋 Build My Own Budget" : "✖ Close Budget Builder";
+    if (!isHidden) card.scrollIntoView({ behavior: "smooth" });
+  }
+
+  function tmplKey(bucket) { return bucket.replace(/\s+/g, "-").toLowerCase(); }
+
+  const TMPL_DEFAULTS = {
+    "Necessities": ["Rent / Mortgage", "Groceries", "Utilities", "Transportation", "Insurance", "Phone Bill"],
+    "Luxuries":    ["Dining Out", "Entertainment", "Shopping", "Subscriptions", "Personal Care"],
+    "Future Self": ["Emergency Fund", "Retirement (401k/IRA)", "Investments", "Education / Skills", "Debt Payoff"]
+  };
+
+  function tmplAddRow(bucket, name = "", amount = "") {
+    const container = document.getElementById("tmpl-rows-" + tmplKey(bucket));
+    const row = document.createElement("tr");
+    row.className = "tmpl-row";
+    row.innerHTML = `
+      <td><input type="text" placeholder="Category name" value="${name}" oninput="tmplRecalculate()"></td>
+      <td style="width:120px;"><input type="number" placeholder="0.00" value="${amount}" min="0" step="0.01" oninput="tmplRecalculate()"></td>
+      <td style="width:36px;text-align:center;"><button class="tmpl-remove-btn" onclick="this.closest('.tmpl-row').remove(); tmplRecalculate();" title="Remove">✕</button></td>
+    `;
+    container.appendChild(row);
+    tmplRecalculate();
+  }
+
+  function tmplRecalculate() {
+    const income = parseFloat(document.getElementById("tmpl-income").value) || 0;
+    const subtotals = {};
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const key = tmplKey(bucket);
+      const rows = document.querySelectorAll("#tmpl-rows-" + key + " .tmpl-row");
+      let subtotal = 0;
+      rows.forEach(row => {
+        const amt = parseFloat(row.querySelector("input[type='number']").value) || 0;
+        subtotal += amt;
+      });
+      subtotals[key] = subtotal;
+      document.getElementById("tmpl-sub-" + key).textContent = "$" + subtotal.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      const pctEl = document.getElementById("tmpl-pct-" + key);
+      pctEl.textContent = income > 0 ? ((subtotal / income) * 100).toFixed(1) + "%" : "0%";
+    });
+
+    // Grand Reveal
+    const fmt = n => "$" + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    const totalExp = Object.values(subtotals).reduce((a, b) => a + b, 0);
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const key = tmplKey(bucket);
+      const amt = subtotals[key];
+      document.getElementById("gr-amt-" + key).textContent = fmt(amt);
+      document.getElementById("gr-inc-" + key).textContent = income > 0 ? ((amt / income) * 100).toFixed(1) + "%" : "0%";
+      document.getElementById("gr-spd-" + key).textContent = totalExp > 0 ? ((amt / totalExp) * 100).toFixed(1) + "%" : "0%";
+    });
+    document.getElementById("gr-total-expenses").textContent = fmt(totalExp);
+    document.getElementById("gr-total-pct-inc").textContent = income > 0 ? ((totalExp / income) * 100).toFixed(1) + "%" : "0%";
+    document.getElementById("gr-total-income").textContent = fmt(income);
+    const remaining = income - totalExp;
+    document.getElementById("gr-remaining").textContent = formatDollar(remaining);
+    document.getElementById("gr-remaining-pct").textContent = income > 0 ? ((remaining / income) * 100).toFixed(1) + "%" : "0%";
+    document.getElementById("gr-remaining-row").style.color = remaining < 0 ? "#c0392b" : "#145a32";
+  }
+
+  async function tmplDownload() {
+    const income = parseFloat(document.getElementById("tmpl-income").value) || 0;
+    const buckets = {};
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const rows = document.querySelectorAll("#tmpl-rows-" + tmplKey(bucket) + " .tmpl-row");
+      buckets[bucket] = [];
+      rows.forEach(row => {
+        const name = row.querySelector("input[type='text']").value.trim() || "Category";
+        const amount = parseFloat(row.querySelector("input[type='number']").value) || 0;
+        buckets[bucket].push({ name, amount });
+      });
+    });
+
+    const msgEl = document.getElementById("tmpl-msg");
+    msgEl.textContent = "";
+    try {
+      const resp = await fetch("/template/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ income, buckets })
+      });
+      if (!resp.ok) throw new Error("Server error: " + resp.status);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "Budget_Template.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      msgEl.textContent = "Download failed: " + e.message;
+    }
+  }
+
+  // Populate default rows on load
+  (function initTemplate() {
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      TMPL_DEFAULTS[bucket].forEach(name => tmplAddRow(bucket, name, ""));
+    });
+  })();
 </script>
 </body>
 </html>
