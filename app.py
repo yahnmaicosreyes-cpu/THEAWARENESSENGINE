@@ -11,11 +11,85 @@ app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 ALL_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
               "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
 
+# Maps any variation of a month name (short or full, any case) -> standard key
+_MONTH_ALIASES = {
+    "JAN": "JAN", "JANUARY": "JAN",
+    "FEB": "FEB", "FEBRUARY": "FEB",
+    "MAR": "MAR", "MARCH": "MAR",
+    "APR": "APR", "APRIL": "APR",
+    "MAY": "MAY",
+    "JUN": "JUN", "JUNE": "JUN",
+    "JUL": "JUL", "JULY": "JUL",
+    "AUG": "AUG", "AUGUST": "AUG",
+    "SEP": "SEP", "SEPT": "SEP", "SEPTEMBER": "SEP",
+    "OCT": "OCT", "OCTOBER": "OCT",
+    "NOV": "NOV", "NOVEMBER": "NOV",
+    "DEC": "DEC", "DECEMBER": "DEC",
+}
+
 # Column-A labels that are structural dividers, not spendable categories.
 # Matched with startswith so partial labels like "EXPENSES BY D.A." are caught.
 _SKIP_PREFIXES = ("ATM WITHDRAWALS", "EXPENSES")
 
 BUCKET_LABELS = ["Necessities", "Luxuries", "Future Self"]
+
+# Known category keywords — recognized regardless of formatting, bold, or case.
+# Each entry is a tuple of (canonical_name, [aliases...]).
+# The canonical name is what gets stored; aliases are what we match against.
+_KNOWN_CATEGORIES = [
+    ("Spiritual",         ["spiritual"]),
+    ("Shelter",           ["shelter"]),
+    ("Utilities",         ["utilities"]),
+    ("Internet",          ["internet"]),
+    ("Food",              ["food"]),
+    ("Home Items",        ["home items", "home item"]),
+    ("Groceries",         ["groceries", "grocery"]),
+    ("Transportation",    ["transportation"]),
+    ("Phone Bill",        ["phone bill"]),
+    ("Laundry",           ["laundry"]),
+    ("Storage",           ["storage"]),
+    ("Moving",            ["moving"]),
+    ("Gym",               ["gym"]),
+    ("Clothing",          ["clothing"]),
+    ("Personal Care",     ["personal care"]),
+    ("Health Care",       ["health care", "healthcare"]),
+    ("Inner Child",       ["inner child"]),
+    ("Entertainment",     ["entertainment"]),
+    ("Education",         ["education"]),
+    ("Vacation",          ["vacation", "vacations"]),
+    ("Personal Business", ["personal business"]),
+    ("Gifts",             ["gifts"]),
+    ("Investments",       ["investments", "investment"]),
+    ("Taxes",             ["taxes"]),
+    ("Debt Repayment",    ["debt repayment"]),
+    ("Prudent Reserve",   ["prudent reserve"]),
+    ("Subscriptions",     ["subscriptions", "subscription"]),
+    ("Dining Out",        ["dining out", "eating out", "dine out"]),
+    ("Take Out",          ["take out", "takeout", "takeaway", "to go"]),
+]
+
+# Flat lookup: lowercase alias -> canonical name
+_KNOWN_CATEGORY_LOOKUP = {
+    alias: canonical
+    for canonical, aliases in _KNOWN_CATEGORIES
+    for alias in aliases
+}
+
+
+def _match_known_category(value):
+    """Return the canonical category name if the cell value matches a known category,
+    otherwise return None. Matching is case-insensitive and strips whitespace."""
+    if not value:
+        return None
+    normalized = str(value).strip().lower()
+    # Exact match first
+    if normalized in _KNOWN_CATEGORY_LOOKUP:
+        return _KNOWN_CATEGORY_LOOKUP[normalized]
+    # Partial match — cell value starts with a known alias (handles "Groceries/Grocery" etc.)
+    for alias, canonical in _KNOWN_CATEGORY_LOOKUP.items():
+        if normalized.startswith(alias):
+            return canonical
+    return None
 
 
 def _find_totals_col(ws):
@@ -28,17 +102,23 @@ def _find_totals_col(ws):
 
 
 def _is_category_header(cell):
-    """True if the cell looks like a top-level category header: bold + distinctly colored fill.
+    """True if the cell looks like a top-level category header.
+    Matches either:
+      1. A known category name (case-insensitive, no formatting required), or
+      2. Bold + distinctly colored fill (original formatting-based rule).
     Excludes white and near-white fills used for alternating sub-item rows."""
     if not cell.value:
         return False
+    # Rule 1: known category name — no formatting required
+    if _match_known_category(cell.value):
+        return True
+    # Rule 2: bold + solid colored fill (original rule)
     if not (cell.font and cell.font.bold):
         return False
     fill = cell.fill
     if fill.fill_type != "solid":
         return False
     fg = fill.fgColor
-    # Exclude transparent, white, and near-white alternating row fills
     _EXCLUDED_COLORS = {"00000000", "FFFFFFFF", "FFF3F3F3"}
     if fg.type == "theme":
         return True
@@ -98,8 +178,13 @@ def extract_simple(wb):
 def extract_data(filepath):
     """Dynamically detect months and categories from the uploaded workbook."""
     wb = load_workbook(filepath, data_only=True)
-    # Build a map of stripped name -> actual sheet name to handle trailing spaces
-    sheet_name_map = {s.strip(): s for s in wb.sheetnames}
+    # Build a map of standard month key -> actual sheet name,
+    # matching any case and both short (Jan) and full (January) spellings.
+    sheet_name_map = {}
+    for s in wb.sheetnames:
+        standard = _MONTH_ALIASES.get(s.strip().upper())
+        if standard and standard not in sheet_name_map:
+            sheet_name_map[standard] = s
     months = [m for m in ALL_MONTHS if m in sheet_name_map]
 
     if not months:
@@ -114,12 +199,15 @@ def extract_data(filepath):
         if totals_col is None:
             continue
 
-        # Scan column A for all bold + colored header rows
+        # Scan column A for all category headers (known name or bold+colored)
         headers = []
         for row_idx in range(1, ws.max_row + 1):
             cell = ws.cell(row=row_idx, column=1)
             if _is_category_header(cell):
-                headers.append((row_idx, str(cell.value).strip()))
+                # Use canonical name if it matches a known category, else use raw value
+                canonical = _match_known_category(cell.value)
+                name = canonical if canonical else str(cell.value).strip()
+                headers.append((row_idx, name))
 
         month_data = {"income": 0.0}
         cat_order_this_month = []
@@ -238,7 +326,7 @@ def build_output_xlsx(averages, assignments):
         if bucket in buckets:
             buckets[bucket].append(cat)
 
-    income = averages.get("income", 1) or 1   # avoid div/0
+    income = averages.get("income", 0)   # guard division with 'if income' checks below
     total_fill = PatternFill("solid", start_color="2C3E50")
     total_white = Font(name="Arial", bold=True, size=11, color="FFFFFF")
     current_row = 5
@@ -411,14 +499,14 @@ def upload():
         return jsonify({"error": "No file uploaded"}), 400
 
     f = request.files["file"]
-    if not f.filename.endswith(".xlsx"):
+    if not f.filename.lower().endswith(".xlsx"):
         return jsonify({"error": "Please upload a .xlsx file"}), 400
 
     # Save upload to temp
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-    f.save(tmp.name)
 
     try:
+        f.save(tmp.name)
         monthly_data, category_names = extract_data(tmp.name)
         session["monthly_data"] = monthly_data
         averages = compute_averages(monthly_data)
