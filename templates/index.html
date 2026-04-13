@@ -890,33 +890,36 @@
     const income = data.income;
     let html = `<table class="preview-table">`;
 
-    html += `<tr><td colspan="4" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">THE AWARENESS ENGINE — My Financial Reality</td></tr>`;
-    html += `<tr class="spacer-row"><td colspan="4"></td></tr>`;
+    html += `<tr><td colspan="5" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">THE AWARENESS ENGINE — My Financial Reality</td></tr>`;
+    html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
     html += `<tr>
       <td style="font-weight:bold;">Total Income</td>
       <td style="font-weight:bold;text-align:right;">${formatDollar(income)}</td>
-      <td style="font-weight:bold;text-align:center;">100%</td>
       <td></td>
+      <td></td>
+      <td style="font-weight:bold;text-align:center;">100%</td>
     </tr>`;
-    html += `<tr class="spacer-row"><td colspan="4"></td></tr>`;
+    html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
 
     data.buckets.forEach(bucket => {
       const color = BUCKET_COLORS[bucket.name] || "#f8f8f8";
-      html += `<tr><td colspan="4" style="background:${color};font-weight:bold;font-size:13px;padding:10px;">▶ ${escapeHtml(bucket.name.toUpperCase())}</td></tr>`;
+      html += `<tr><td colspan="5" style="background:${color};font-weight:bold;font-size:13px;padding:10px;">▶ ${escapeHtml(bucket.name.toUpperCase())}</td></tr>`;
       html += `<tr style="font-size:11px;font-weight:bold;text-align:center;">
         <td style="background:${color};">Category</td>
-        <td style="background:${color};">Avg Monthly ($)</td>
+        <td style="background:${color};">Total Spending (all months)</td>
+        <td style="background:${color};">Avg Monthly Spending</td>
         <td style="background:${color};">% of Income</td>
         <td style="background:${color};"></td>
       </tr>`;
 
       if (bucket.categories.length === 0) {
-        html += `<tr><td colspan="3" style="background:${color};color:#888;">(No categories assigned)</td><td style="background:${color};"></td></tr>`;
+        html += `<tr><td colspan="4" style="background:${color};color:#888;">(No categories assigned)</td><td style="background:${color};"></td></tr>`;
       } else {
         bucket.categories.forEach(cat => {
           const pct = income ? ((cat.amt / income) * 100).toFixed(1) : "0.0";
           html += `<tr class="cat-data-row" data-bucket="${escapeHtml(bucket.name)}">
             <td class="editable" contenteditable="true" style="background:${color};" data-field="name">${escapeHtml(cat.name)}</td>
+            <td style="background:${color};text-align:right;" data-field="raw_total">${formatDollar(cat.raw_total)}</td>
             <td class="editable" contenteditable="true" style="background:${color};text-align:right;" data-field="amt" data-raw="${cat.amt}">${formatDollar(cat.amt)}</td>
             <td class="cat-pct" style="background:${color};text-align:center;">${pct}%</td>
             <td style="background:${color};"><div class="slider-wrap"><span class="slider-bubble hidden"></span><input type="range" class="whatif-slider" min="0" max="${cat.amt * 2 || 1000}" step="1" value="${cat.amt}" data-original="${cat.amt}"><button class="whatif-reset-btn hidden" onclick="resetSlider(this)" title="Reset to original">↺</button></div></td>
@@ -926,21 +929,23 @@
 
       html += `<tr>
         <td style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">TOTAL — ${escapeHtml(bucket.name)}</td>
+        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:right;">${formatDollar(bucket.raw_total)}</td>
         <td style="background:#2c3e50;color:white;font-weight:bold;text-align:right;">${formatDollar(bucket.total)}</td>
         <td style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">${bucket.pct_income.toFixed(1)}%</td>
         <td style="background:#2c3e50;color:white;"></td>
       </tr>`;
-      html += `<tr class="spacer-row"><td colspan="4"></td></tr>`;
+      html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
     });
 
-    html += `<tr class="spacer-row"><td colspan="4"></td></tr>`;
-    html += `<tr><td colspan="4" style="background:#1a5276;color:white;font-weight:bold;font-size:13px;text-align:center;padding:10px;">─── GRAND REVEAL ───</td></tr>`;
+    html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
+    html += `<tr><td colspan="5" style="background:#1a5276;color:white;font-weight:bold;font-size:13px;text-align:center;padding:10px;">─── GRAND REVEAL ───</td></tr>`;
     html += `<tr style="background:#1a5276;color:white;font-size:11px;font-weight:bold;text-align:center;">
-      <td>Bucket</td><td>Avg Monthly ($)</td><td>% of Spending</td><td>% of Income</td>
+      <td>Bucket</td><td>Total Spending (all months)</td><td>Avg Monthly Spending</td><td>% of Spending</td><td>% of Income</td>
     </tr>`;
     data.grand_reveal.forEach(row => {
       html += `<tr style="text-align:center;font-weight:bold;">
         <td>${escapeHtml(row.name.toUpperCase())}</td>
+        <td>${formatDollar(row.raw_total)}</td>
         <td>${formatDollar(row.total)}</td>
         <td>${row.pct_spending.toFixed(1)}%</td>
         <td>${row.pct_income.toFixed(1)}%</td>
@@ -948,17 +953,19 @@
     });
     html += `<tr style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">
       <td>TOTAL SPENDING</td>
+      <td>${formatDollar(data.total_raw_spending)}</td>
       <td>${formatDollar(data.total_spending)}</td>
       <td>100.0%</td>
       <td>${data.total_pct_income.toFixed(1)}%</td>
     </tr>`;
-    const remaining = data.income - data.total_spending;
+    const remaining = data.remaining_income;
     const remainingPct = data.income > 0 ? ((remaining / data.income) * 100).toFixed(1) : "0.0";
     const remColor = remaining < 0 ? "#c0392b" : "#145a32";
     const remBg   = remaining < 0 ? "#FDECEA"  : "#D5F5E3";
     html += `<tr style="background:${remBg};color:${remColor};font-weight:bold;text-align:center;">
       <td>💰 Remaining Income</td>
       <td>${formatDollar(remaining)}</td>
+      <td>—</td>
       <td>—</td>
       <td>${remainingPct}%</td>
     </tr>`;
@@ -1101,18 +1108,20 @@
         });
 
         // Find and update the TOTAL row for this bucket
+        // Columns: [0]=label [1]=raw_total(unchanged) [2]=avg [3]=pct_income [4]=slider
         const allRows = Array.from(document.querySelectorAll(".preview-table tr"));
         const totalLabel = `TOTAL — ${bucket}`;
         allRows.forEach(r => {
           const firstTd = r.querySelector("td");
           if (firstTd && firstTd.textContent.trim() === totalLabel) {
             const cells = r.querySelectorAll("td");
-            cells[1].textContent = formatDollar(bucketTotal);
-            cells[2].textContent = income ? ((bucketTotal / income) * 100).toFixed(1) + "%" : "0.0%";
+            cells[2].textContent = formatDollar(bucketTotal);
+            cells[3].textContent = income ? ((bucketTotal / income) * 100).toFixed(1) + "%" : "0.0%";
           }
         });
 
         // Recalculate grand reveal
+        // Grand Reveal columns: [0]=bucket [1]=raw_total(unchanged) [2]=avg [3]=%spending [4]=%income
         const allBuckets = {};
         document.querySelectorAll(".preview-table .cat-data-row").forEach(r => {
           const b = r.dataset.bucket;
@@ -1129,16 +1138,17 @@
           Object.keys(allBuckets).forEach(b => {
             if (label === b.toUpperCase()) {
               const cells = r.querySelectorAll("td");
-              cells[1].textContent = formatDollar(allBuckets[b]);
-              cells[2].textContent = totalSpending ? ((allBuckets[b] / totalSpending) * 100).toFixed(1) + "%" : "0.0%";
-              cells[3].textContent = income ? ((allBuckets[b] / income) * 100).toFixed(1) + "%" : "0.0%";
+              cells[2].textContent = formatDollar(allBuckets[b]);
+              cells[3].textContent = totalSpending ? ((allBuckets[b] / totalSpending) * 100).toFixed(1) + "%" : "0.0%";
+              cells[4].textContent = income ? ((allBuckets[b] / income) * 100).toFixed(1) + "%" : "0.0%";
             }
           });
 
+          // TOTAL SPENDING: [0]=label [1]=raw_total(unchanged) [2]=avg [3]=100% [4]=%income
           if (label === "TOTAL SPENDING") {
             const cells = r.querySelectorAll("td");
-            cells[1].textContent = formatDollar(totalSpending);
-            cells[3].textContent = income ? ((totalSpending / income) * 100).toFixed(1) + "%" : "0.0%";
+            cells[2].textContent = formatDollar(totalSpending);
+            cells[4].textContent = income ? ((totalSpending / income) * 100).toFixed(1) + "%" : "0.0%";
           }
         });
 

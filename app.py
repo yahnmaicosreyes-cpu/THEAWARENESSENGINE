@@ -32,6 +32,8 @@ _MONTH_ALIASES = {
 # Matched with startswith so partial labels like "EXPENSES BY D.A." are caught.
 _SKIP_PREFIXES = ("ATM WITHDRAWALS", "EXPENSES")
 
+_EXCLUDED_COLORS = {"00000000", "FFFFFFFF", "FFF3F3F3"}
+
 BUCKET_LABELS = ["Necessities", "Luxuries", "Future Self"]
 
 # Known category keywords — recognized regardless of formatting, bold, or case.
@@ -120,7 +122,6 @@ def _is_category_header(cell):
     if fill.fill_type != "solid":
         return False
     fg = fill.fgColor
-    _EXCLUDED_COLORS = {"00000000", "FFFFFFFF", "FFF3F3F3"}
     if fg.type == "theme":
         return True
     return fg.rgb not in _EXCLUDED_COLORS
@@ -390,10 +391,23 @@ def compute_averages(monthly_data, selected_months=None):
     return result
 
 
-def build_output_xlsx(averages, assignments):
+def compute_totals(monthly_data, selected_months=None):
+    """Return raw sum (not average) for each category across active months."""
+    if selected_months:
+        active_months = [m for m in selected_months if m in monthly_data]
+    else:
+        active_months = [m for m, data in monthly_data.items() if data.get("income", 0) > 0]
+    if not active_months:
+        return {}
+    keys = list(next(iter(monthly_data.values())).keys())
+    return {k: round(sum(monthly_data[m].get(k, 0) for m in active_months), 2) for k in keys}
+
+
+def build_output_xlsx(averages, assignments, totals=None):
     """
     Build the clean 3-bucket output spreadsheet.
     assignments = { category_name: bucket_label, ... }
+    totals = { category_name: raw_sum_across_months, ... }
     """
     wb = Workbook()
     ws = wb.active
@@ -425,13 +439,17 @@ def build_output_xlsx(averages, assignments):
         if num_fmt: cell.number_format = num_fmt
         cell.border = border
 
+    totals = totals or {}
+
     # ── Column widths ─────────────────────────────────────────────────────────
     ws.column_dimensions["A"].width = 30
-    ws.column_dimensions["B"].width = 18
-    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["B"].width = 22  # Total Spending (all months)
+    ws.column_dimensions["C"].width = 20  # Avg Monthly Spending
+    ws.column_dimensions["D"].width = 14  # % of Income / % of Spending
+    ws.column_dimensions["E"].width = 14  # % of Income (Grand Reveal)
 
     # ── Title row ─────────────────────────────────────────────────────────────
-    ws.merge_cells("A1:C1")
+    ws.merge_cells("A1:E1")
     ws["A1"] = "THE AWARENESS ENGINE — My Financial Reality"
     style(ws["A1"], font=title_font, fill=title_fill, align=center)
     ws.row_dimensions[1].height = 30
@@ -440,10 +458,12 @@ def build_output_xlsx(averages, assignments):
     ws.row_dimensions[2].height = 6   # spacer
     ws["A3"] = "Total Income"
     ws["B3"] = averages.get("income", 0)
-    ws["C3"] = "100%"
+    ws["E3"] = "100%"
     style(ws["A3"], font=total_font, align=left)
     style(ws["B3"], font=total_font, align=right, num_fmt='"$"#,##0.00')
-    style(ws["C3"], font=pct_font,   align=center)
+    style(ws["C3"], font=total_font, align=right)
+    style(ws["D3"], font=total_font, align=right)
+    style(ws["E3"], font=pct_font,   align=center)
     ws.row_dimensions[3].height = 22
 
     ws.row_dimensions[4].height = 8   # spacer
@@ -471,7 +491,7 @@ def build_output_xlsx(averages, assignments):
         fill = bucket_fill[bucket_name]
 
         # Bucket header
-        ws.merge_cells(f"A{current_row}:C{current_row}")
+        ws.merge_cells(f"A{current_row}:D{current_row}")
         ws[f"A{current_row}"] = f"▶  {bucket_name.upper()}"
         style(ws[f"A{current_row}"], font=bucket_font, fill=fill, align=left)
         ws.row_dimensions[current_row].height = 24
@@ -479,9 +499,10 @@ def build_output_xlsx(averages, assignments):
 
         # Column sub-headers
         ws[f"A{current_row}"] = "Category"
-        ws[f"B{current_row}"] = "Avg Monthly ($)"
-        ws[f"C{current_row}"] = "% of Income"
-        for col in ["A", "B", "C"]:
+        ws[f"B{current_row}"] = "Total Spending (all months)"
+        ws[f"C{current_row}"] = "Avg Monthly Spending"
+        ws[f"D{current_row}"] = "% of Income"
+        for col in ["A", "B", "C", "D"]:
             style(ws[f"{col}{current_row}"], font=Font(name="Arial", bold=True, size=10),
                   fill=fill, align=center)
         ws.row_dimensions[current_row].height = 18
@@ -492,21 +513,26 @@ def build_output_xlsx(averages, assignments):
         if not cats:
             ws[f"A{current_row}"] = "(No categories assigned)"
             ws[f"B{current_row}"] = 0
-            ws[f"C{current_row}"] = "0.0%"
-            for col in ["A", "B", "C"]:
+            ws[f"C{current_row}"] = 0
+            ws[f"D{current_row}"] = "0.0%"
+            for col in ["A", "B", "C", "D"]:
                 style(ws[f"{col}{current_row}"], font=label_font, fill=fill, align=left)
             current_row += 1
         else:
             for cat in cats:
                 amt = averages.get(cat, 0)
+                raw = totals.get(cat, 0)
                 pct = (amt / income) * 100 if income else 0
                 ws[f"A{current_row}"] = cat
-                ws[f"B{current_row}"] = amt
-                ws[f"C{current_row}"] = f"{pct:.1f}%"
+                ws[f"B{current_row}"] = raw
+                ws[f"C{current_row}"] = amt
+                ws[f"D{current_row}"] = f"{pct:.1f}%"
                 style(ws[f"A{current_row}"], font=label_font, fill=fill, align=left)
                 style(ws[f"B{current_row}"], font=label_font, fill=fill,
                       align=right, num_fmt='"$"#,##0.00')
-                style(ws[f"C{current_row}"], font=label_font, fill=fill, align=center)
+                style(ws[f"C{current_row}"], font=label_font, fill=fill,
+                      align=right, num_fmt='"$"#,##0.00')
+                style(ws[f"D{current_row}"], font=label_font, fill=fill, align=center)
                 ws.row_dimensions[current_row].height = 20
                 current_row += 1
 
@@ -517,18 +543,18 @@ def build_output_xlsx(averages, assignments):
         bucket_pct = (bucket_total_amt / income) * 100 if income else 0
         ws[f"A{current_row}"] = f"TOTAL — {bucket_name}"
         ws[f"B{current_row}"] = f"=SUM(B{data_start}:B{data_end})"
-        ws[f"C{current_row}"] = f"{bucket_pct:.1f}%"
-        for col in ["A", "B", "C"]:
+        ws[f"C{current_row}"] = f"=SUM(C{data_start}:C{data_end})"
+        ws[f"D{current_row}"] = f"{bucket_pct:.1f}%"
+        for col in ["A", "B", "C", "D"]:
             style(ws[f"{col}{current_row}"], font=total_white, fill=total_fill, align=center)
         ws[f"B{current_row}"].number_format = '"$"#,##0.00'
+        ws[f"C{current_row}"].number_format = '"$"#,##0.00'
         ws.row_dimensions[current_row].height = 22
         current_row += 2   # spacer after each bucket
 
     # ── Grand summary rows ────────────────────────────────────────────────────
-    ws.column_dimensions["D"].width = 16   # % of Income column
-
     current_row += 1
-    ws.merge_cells(f"A{current_row}:D{current_row}")
+    ws.merge_cells(f"A{current_row}:E{current_row}")
     ws[f"A{current_row}"] = "─── GRAND REVEAL ───"
     style(ws[f"A{current_row}"], font=Font(name="Arial", bold=True, size=12,
           color="FFFFFF"), fill=PatternFill("solid", start_color="1A5276"), align=center)
@@ -537,8 +563,8 @@ def build_output_xlsx(averages, assignments):
 
     # Grand Reveal column headers
     reveal_fill = PatternFill("solid", start_color="1A5276")
-    for col, label in [("A", "Bucket"), ("B", "Amount ($)"),
-                        ("C", "% of Spending"), ("D", "% of Income")]:
+    for col, label in [("A", "Bucket"), ("B", "Total Spending (all months)"),
+                        ("C", "Avg Monthly Spending"), ("D", "% of Spending"), ("E", "% of Income")]:
         ws[f"{col}{current_row}"] = label
         style(ws[f"{col}{current_row}"], fill=reveal_fill, align=center)
         ws[f"{col}{current_row}"].font = Font(name="Arial", bold=True, size=10, color="FFFFFF")
@@ -547,32 +573,60 @@ def build_output_xlsx(averages, assignments):
 
     left_out = {cat for cat, b in assignments.items() if b == "Leave Out"}
     all_spent = sum(v for k, v in averages.items() if k != "income" and k not in left_out)
+    all_raw_spent = sum(totals.get(k, 0) for k in averages if k != "income" and k not in left_out)
 
     for bucket_name in BUCKET_LABELS:
         cats = buckets[bucket_name]
         bucket_total = sum(averages.get(c, 0) for c in cats)
+        bucket_raw_total = sum(totals.get(c, 0) for c in cats)
         pct_spending = (bucket_total / all_spent) * 100 if all_spent else 0
         pct_income   = (bucket_total / income)    * 100 if income    else 0
         ws[f"A{current_row}"] = bucket_name.upper()
-        ws[f"B{current_row}"] = bucket_total
-        ws[f"C{current_row}"] = f"{pct_spending:.1f}%"
-        ws[f"D{current_row}"] = f"{pct_income:.1f}%"
-        for col in ["A", "B", "C", "D"]:
+        ws[f"B{current_row}"] = bucket_raw_total
+        ws[f"C{current_row}"] = bucket_total
+        ws[f"D{current_row}"] = f"{pct_spending:.1f}%"
+        ws[f"E{current_row}"] = f"{pct_income:.1f}%"
+        for col in ["A", "B", "C", "D", "E"]:
             style(ws[f"{col}{current_row}"],
                   font=Font(name="Arial", bold=True, size=11), align=center)
         ws[f"B{current_row}"].number_format = '"$"#,##0.00'
+        ws[f"C{current_row}"].number_format = '"$"#,##0.00'
         ws.row_dimensions[current_row].height = 22
         current_row += 1
 
     # Total spending summary row
-    ws[f"A{current_row}"] = "TOTAL SPENDING"
-    ws[f"B{current_row}"] = all_spent
-    ws[f"C{current_row}"] = "100.0%"
-    ws[f"D{current_row}"] = f"{(all_spent / income * 100):.1f}%" if income else "0.0%"
     dark_fill = PatternFill("solid", start_color="2C3E50")
     white_bold = Font(name="Arial", bold=True, size=11, color="FFFFFF")
-    for col in ["A", "B", "C", "D"]:
+    ws[f"A{current_row}"] = "TOTAL SPENDING"
+    ws[f"B{current_row}"] = all_raw_spent
+    ws[f"C{current_row}"] = all_spent
+    ws[f"D{current_row}"] = "100.0%"
+    ws[f"E{current_row}"] = f"{(all_spent / income * 100):.1f}%" if income else "0.0%"
+    for col in ["A", "B", "C", "D", "E"]:
         style(ws[f"{col}{current_row}"], font=white_bold, fill=dark_fill, align=center)
+    ws[f"B{current_row}"].number_format = '"$"#,##0.00'
+    ws[f"C{current_row}"].number_format = '"$"#,##0.00'
+    ws.row_dimensions[current_row].height = 22
+
+    # Remaining Income row
+    current_row += 1
+    remaining_income = round(income - all_raw_spent, 2)
+    if remaining_income >= 0:
+        rem_fill = PatternFill("solid", start_color="D5F5E3")
+        rem_font = Font(name="Arial", bold=True, size=11, color="145A32")
+    else:
+        rem_fill = PatternFill("solid", start_color="FDECEA")
+        rem_font = Font(name="Arial", bold=True, size=11, color="C0392B")
+    ws[f"A{current_row}"] = "Remaining Income"
+    ws[f"B{current_row}"] = remaining_income
+    ws[f"C{current_row}"] = ""
+    ws[f"D{current_row}"] = "—"
+    ws[f"E{current_row}"] = "—"
+    for col in ["A", "B", "C", "D", "E"]:
+        ws[f"{col}{current_row}"].fill = rem_fill
+        ws[f"{col}{current_row}"].font = rem_font
+        ws[f"{col}{current_row}"].alignment = center
+        ws[f"{col}{current_row}"].border = border
     ws[f"B{current_row}"].number_format = '"$"#,##0.00'
     ws.row_dimensions[current_row].height = 22
 
@@ -582,41 +636,53 @@ def build_output_xlsx(averages, assignments):
     return tmp.name
 
 
-def build_table_data(averages, assignments):
+def build_table_data(averages, assignments, totals=None):
     """Build structured table data for frontend rendering."""
     income = averages.get("income", 0)
     left_out = {cat for cat, b in assignments.items() if b == "Leave Out"}
+    totals = totals or {}
 
     buckets_out = []
     for bucket_name in BUCKET_LABELS:
         cats = [cat for cat, b in assignments.items() if b == bucket_name]
-        categories = [{"name": cat, "amt": round(averages.get(cat, 0), 2)} for cat in cats]
+        categories = [{"name": cat,
+                       "amt": round(averages.get(cat, 0), 2),
+                       "raw_total": round(totals.get(cat, 0), 2)} for cat in cats]
         bucket_total = round(sum(c["amt"] for c in categories), 2)
+        bucket_raw_total = round(sum(c["raw_total"] for c in categories), 2)
         pct_income = round((bucket_total / income * 100), 1) if income else 0.0
         buckets_out.append({
             "name": bucket_name,
             "categories": categories,
             "total": bucket_total,
+            "raw_total": bucket_raw_total,
             "pct_income": pct_income
         })
 
     all_spent = round(sum(v for k, v in averages.items()
                           if k != "income" and k not in left_out), 2)
+    all_raw_spent = round(sum(totals.get(k, 0) for k in averages
+                               if k != "income" and k not in left_out), 2)
 
     grand_reveal = []
     for b in buckets_out:
         grand_reveal.append({
             "name": b["name"],
             "total": b["total"],
+            "raw_total": b["raw_total"],
             "pct_spending": round((b["total"] / all_spent * 100), 1) if all_spent else 0.0,
             "pct_income": b["pct_income"]
         })
+
+    remaining_income = round(income - all_raw_spent, 2)
 
     return {
         "income": round(income, 2),
         "buckets": buckets_out,
         "grand_reveal": grand_reveal,
         "total_spending": all_spent,
+        "total_raw_spending": all_raw_spent,
+        "remaining_income": remaining_income,
         "total_pct_income": round((all_spent / income * 100), 1) if income else 0.0
     }
 
@@ -673,14 +739,17 @@ def generate():
     if not averages:
         return jsonify({"error": "No data found for the selected months."}), 400
 
+    totals = compute_totals(monthly_data, selected_months)
+
     try:
-        output_path = build_output_xlsx(averages, assignments)
+        output_path = build_output_xlsx(averages, assignments, totals)
         session["output_path"] = output_path
         session["assignments"] = assignments
 
         # Build month-by-month breakdown for trend view
         active_months = selected_months if selected_months else \
             [m for m, d in monthly_data.items() if d.get("income", 0) > 0]
+        session["active_months"] = active_months
         monthly_breakdown = {
             cat: {m: round(monthly_data[m].get(cat, 0), 2) for m in active_months}
             for cat, bucket in assignments.items()
@@ -689,7 +758,7 @@ def generate():
 
         return jsonify({
             "success": True,
-            "table": build_table_data(averages, assignments),
+            "table": build_table_data(averages, assignments, totals),
             "monthly_breakdown": monthly_breakdown,
             "trend_months": active_months
         })
@@ -710,16 +779,20 @@ def save():
             averages[cat["name"]] = float(cat["amt"])
             assignments[cat["name"]] = bucket_name
 
+    monthly_data = session.get("monthly_data")
+    active_months = session.get("active_months")
+    totals = compute_totals(monthly_data, active_months) if monthly_data else {}
+
     try:
         old_path = session.get("output_path")
         if old_path and os.path.exists(old_path):
             os.unlink(old_path)
 
-        output_path = build_output_xlsx(averages, assignments)
+        output_path = build_output_xlsx(averages, assignments, totals)
         session["output_path"] = output_path
         session["averages"] = averages
         session["assignments"] = assignments
-        return jsonify({"success": True, "table": build_table_data(averages, assignments)})
+        return jsonify({"success": True, "table": build_table_data(averages, assignments, totals)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
