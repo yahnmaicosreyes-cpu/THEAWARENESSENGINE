@@ -230,14 +230,49 @@ def _is_daily_tracking_template(wb, sheet_name_map):
     return False
 
 
+def _is_bold_colored_header(cell):
+    """True if a cell is a bold + distinctly colored header (marks end of a section)."""
+    if not cell.value:
+        return False
+    if not (cell.font and cell.font.bold):
+        return False
+    fill = cell.fill
+    if fill.fill_type != "solid":
+        return False
+    fg = fill.fgColor
+    if fg.type == "theme":
+        return True
+    return fg.rgb not in _EXCLUDED_COLORS
+
+
+def _read_row_total(ws, row_idx, totals_col):
+    """Dual-calculation: sum raw daily cols ourselves, also read the TOTALS col.
+    If both match within ±0.02, use the TOTALS col value.
+    If they differ, trust our own calculation."""
+    own_sum = 0.0
+    for col_idx in range(2, totals_col):
+        val = ws.cell(row_idx, col_idx).value
+        if isinstance(val, (int, float)):
+            own_sum += val
+    own_sum = round(own_sum, 2)
+
+    totals_val = ws.cell(row_idx, totals_col).value
+    sheet_total = round(float(totals_val), 2) if isinstance(totals_val, (int, float)) else 0.0
+
+    if abs(own_sum - sheet_total) <= 0.02:
+        return sheet_total
+    return own_sum
+
+
 def _extract_daily_tracking(wb, sheet_name_map, months):
     """Extract data from the daily-tracking format.
     - Category labels are read from the JAN sheet only (other sheets use =JAN!Axx formulas)
-    - Income and expense amounts are summed from raw daily columns (B up to TOTALS col)
+    - Scans col A for 'income' header (case-insensitive), reads sub-rows until next bold+colored header
+    - Dual-calculation: compares own daily sum vs TOTALS col, trusts own sum if mismatch
     - Handles variable month lengths automatically
     - Works whether file was saved from Excel or Google Sheets (no formula cache needed)
     """
-    # Get category labels from JAN sheet (the only sheet with plain text labels)
+    # Get category labels and cell formatting from JAN sheet
     jan_ws = wb[sheet_name_map["JAN"]]
     row_labels = {}
     for row_idx in range(1, jan_ws.max_row + 1):
@@ -245,10 +280,26 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
         if val and isinstance(val, str) and val.strip():
             row_labels[row_idx] = val.strip()
 
-    # Find the TOTALS col in JAN to know where daily columns end
     jan_totals_col = _find_totals_col(jan_ws)
     if jan_totals_col is None:
         return {}, []
+
+    # Find income section: locate the 'income' header (case-insensitive) in col A,
+    # then collect sub-rows until the next bold+colored header cell
+    income_rows = set()
+    in_income_section = False
+    for row_idx in sorted(row_labels.keys()):
+        label = row_labels[row_idx]
+        cell = jan_ws.cell(row_idx, 1)
+        if label.strip().upper() == "INCOME" or label.strip().upper() == "INCOME ":
+            in_income_section = True
+            continue
+        if in_income_section:
+            # Stop at the next bold+colored header
+            if _is_bold_colored_header(cell):
+                in_income_section = False
+            else:
+                income_rows.add(row_idx)
 
     results = {}
     ordered_cats = []
@@ -263,35 +314,29 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
         cat_order_this_month = []
 
         for row_idx, label in row_labels.items():
-            label_upper = label.upper()
+            label_upper = label.upper().strip()
 
-            # Skip structural rows
+            # Skip structural/header rows
             if any(label_upper.startswith(p) for p in _SKIP_PREFIXES):
                 continue
-            if label_upper.strip() in ("INCOME", "TOTAL INCOME BEFORE TAXES",
-                                       "EXPENSES BY D.A. CATEGORIES", "TOTAL EXPENSES"):
+            if label_upper in ("INCOME", "TOTAL INCOME BEFORE TAXES",
+                               "EXPENSES BY D.A. CATEGORIES", "TOTAL EXPENSES"):
                 continue
-            # Skip numbered section headers like "1 - SPIRITUAL"
+            # Skip numbered section headers like "1 - SPIRITUAL", "2 - Needs"
             if re.match(r'^\d+\s*[-\u2013]\s*\w+', label):
                 continue
 
-            # Sum raw daily values from col B up to (but not including) TOTALS col
-            total = 0.0
-            for col_idx in range(2, totals_col):
-                val = ws.cell(row_idx, col_idx).value
-                if isinstance(val, (int, float)):
-                    total += val
-            total = round(total, 2)
+            total = _read_row_total(ws, row_idx, totals_col)
 
             if total == 0.0:
                 continue
 
-            canonical = _match_known_category(label)
-            name = canonical if canonical else label
-
-            if "INCOME" in label_upper:
+            # Route to income or expense based on position in income section
+            if row_idx in income_rows:
                 month_data["income"] = round(month_data["income"] + total, 2)
             else:
+                canonical = _match_known_category(label)
+                name = canonical if canonical else label
                 month_data[name] = round(month_data.get(name, 0.0) + total, 2)
                 if name not in cat_order_this_month:
                     cat_order_this_month.append(name)
