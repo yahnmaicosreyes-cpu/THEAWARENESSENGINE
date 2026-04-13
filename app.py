@@ -3,6 +3,7 @@ import secrets
 from flask import Flask, render_template, request, jsonify, send_file, session, after_this_request
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+import re
 import tempfile
 
 app = Flask(__name__)
@@ -175,14 +176,137 @@ def extract_simple(wb):
     return monthly_data, ordered_cats
 
 
+# Spend-column keywords for the YYYY Month template (Option B)
+_SPEND_KEYWORDS = {"total", "totals", "spent", "spend", "monthly spend", "monthly spent"}
+
+
+def _strip_year_prefix(name):
+    """Strip a leading year (2020-2035) from a sheet name, e.g. '2025 May' -> 'MAY'.
+    Returns the uppercased remainder, or the original uppercased name if no year found."""
+    match = re.match(r'^(20[2-3][0-9])\s+(.+)$', name.strip())
+    if match:
+        return match.group(2).strip().upper()
+    return name.strip().upper()
+
+
+def _is_yyyy_month_template(wb, sheet_name_map):
+    """Detect if this workbook uses the 'YYYY Month' style template.
+    Requires ALL three conditions to be true to avoid false positives:
+      1. At least one sheet name had a year prefix (2020-2035) stripped
+      2. Row 11 col A contains 'SPENDING'
+      3. Row 11 contains a spend-keyword column header"""
+    has_year_prefix = any(
+        re.match(r'^(20[2-3][0-9])\s+', actual.strip())
+        for actual in sheet_name_map.values()
+    )
+    if not has_year_prefix:
+        return False
+
+    for standard, actual in sheet_name_map.items():
+        ws = wb[actual]
+        cell_a11 = ws.cell(11, 1).value
+        if cell_a11 and str(cell_a11).strip().upper() == "SPENDING":
+            for c in range(1, ws.max_column + 1):
+                val = ws.cell(11, c).value
+                if val and str(val).strip().lower() in _SPEND_KEYWORDS:
+                    return True
+    return False
+
+
+def _find_spend_col(ws):
+    """For the YYYY Month template: find the column in row 11 matching a spend keyword.
+    Returns (col_index, data_start_row) or (None, None)."""
+    for c in range(1, ws.max_column + 1):
+        val = ws.cell(11, c).value
+        if val and str(val).strip().lower() in _SPEND_KEYWORDS:
+            return c, 12  # data starts at row 12
+    return None, None
+
+
+def _extract_yyyy_month(wb, sheet_name_map, months):
+    """Extract data from the YYYY Month style template.
+    Reads income from rows 3-10 (Earned col) and category subtotals from rows 12+."""
+    results = {}
+    ordered_cats = []
+
+    for month in months:
+        ws = wb[sheet_name_map[month]]
+        spend_col, data_start = _find_spend_col(ws)
+        if spend_col is None:
+            continue
+
+        month_data = {"income": 0.0}
+        cat_order_this_month = []
+
+        # Read income from the header section (rows 3-10) using the Earned column (col E = 5)
+        # In this template, income rows live above the SPENDING header at row 11
+        income_total = 0.0
+        for row_idx in range(3, 11):
+            name_val = ws.cell(row_idx, 1).value
+            if not name_val:
+                continue
+            name_str = str(name_val).strip().upper()
+            # Skip section headers and total rows
+            if name_str in ("INCOME", "TOTAL INCOME") or "TOTAL" in name_str:
+                continue
+            amt_val = ws.cell(row_idx, spend_col).value
+            if isinstance(amt_val, (int, float)) and amt_val > 0:
+                income_total += amt_val
+        month_data["income"] = round(income_total, 2)
+
+        for row_idx in range(data_start, ws.max_row + 1):
+            cell_a = ws.cell(row_idx, 1)
+            if not cell_a.value:
+                continue
+            name_raw = str(cell_a.value).strip()
+            if not name_raw:
+                continue
+
+            name_upper = name_raw.upper()
+
+            # Skip structural rows
+            if "TOTAL" in name_upper or any(name_upper.startswith(p) for p in _SKIP_PREFIXES):
+                continue
+
+            # Only read rows that are category group subtotals (e.g. "1. Spiritual")
+            # These are bold or match a known category
+            canonical = _match_known_category(name_raw)
+            if not canonical and not (cell_a.font and cell_a.font.bold):
+                continue
+
+            name = canonical if canonical else name_raw
+            amt_val = ws.cell(row_idx, spend_col).value
+            amt = round(float(amt_val), 2) if isinstance(amt_val, (int, float)) else 0.0
+
+            if "INCOME" in name_upper:
+                month_data["income"] = amt
+            else:
+                month_data[name] = amt
+                if name not in cat_order_this_month:
+                    cat_order_this_month.append(name)
+
+        if not ordered_cats:
+            ordered_cats = cat_order_this_month
+
+        results[month] = month_data
+
+    return results, ordered_cats
+
+
 def extract_data(filepath):
     """Dynamically detect months and categories from the uploaded workbook."""
     wb = load_workbook(filepath, data_only=True)
-    # Build a map of standard month key -> actual sheet name,
-    # matching any case and both short (Jan) and full (January) spellings.
+
+    # Build a map of standard month key -> actual sheet name.
+    # Handles: plain names (JAN, January), and YYYY Month format (2025 May) for years 2020-2035.
     sheet_name_map = {}
     for s in wb.sheetnames:
+        # Try direct alias match first
         standard = _MONTH_ALIASES.get(s.strip().upper())
+        # If not found, try stripping a year prefix
+        if not standard:
+            stripped = _strip_year_prefix(s)
+            standard = _MONTH_ALIASES.get(stripped)
         if standard and standard not in sheet_name_map:
             sheet_name_map[standard] = s
     months = [m for m in ALL_MONTHS if m in sheet_name_map]
@@ -190,6 +314,11 @@ def extract_data(filepath):
     if not months:
         return extract_simple(wb)
 
+    # ── Option B: Detect and handle the YYYY Month template as a special case ──
+    if _is_yyyy_month_template(wb, sheet_name_map):
+        return _extract_yyyy_month(wb, sheet_name_map, months)
+
+    # ── Standard extraction ────────────────────────────────────────────────────
     results = {}
     ordered_cats = []   # category names in sheet order, set from the first month
 
@@ -237,7 +366,8 @@ def extract_data(filepath):
 
 
 def compute_averages(monthly_data, selected_months=None):
-    """Average income and each category across selected months.
+    """Income is summed across all active months.
+    All spending categories are averaged across active months.
     If selected_months is None, defaults to all active months (income > 0)."""
     if selected_months:
         active_months = [m for m in selected_months if m in monthly_data]
@@ -248,11 +378,16 @@ def compute_averages(monthly_data, selected_months=None):
         return {}
 
     keys = list(next(iter(monthly_data.values())).keys())
-    averages = {}
+    result = {}
     for k in keys:
         total = sum(monthly_data[m].get(k, 0) for m in active_months)
-        averages[k] = round(total / n, 2)
-    return averages
+        if k == "income":
+            # Income is the grand total across all months
+            result[k] = round(total, 2)
+        else:
+            # Spending categories are averaged across months
+            result[k] = round(total / n, 2)
+    return result
 
 
 def build_output_xlsx(averages, assignments):
@@ -303,7 +438,7 @@ def build_output_xlsx(averages, assignments):
 
     # ── Income row ────────────────────────────────────────────────────────────
     ws.row_dimensions[2].height = 6   # spacer
-    ws["A3"] = "Average Monthly Income"
+    ws["A3"] = "Total Income"
     ws["B3"] = averages.get("income", 0)
     ws["C3"] = "100%"
     style(ws["A3"], font=total_font, align=left)
@@ -402,7 +537,7 @@ def build_output_xlsx(averages, assignments):
 
     # Grand Reveal column headers
     reveal_fill = PatternFill("solid", start_color="1A5276")
-    for col, label in [("A", "Bucket"), ("B", "Avg Monthly ($)"),
+    for col, label in [("A", "Bucket"), ("B", "Amount ($)"),
                         ("C", "% of Spending"), ("D", "% of Income")]:
         ws[f"{col}{current_row}"] = label
         style(ws[f"{col}{current_row}"], fill=reveal_fill, align=center)
@@ -511,7 +646,7 @@ def upload():
         session["monthly_data"] = monthly_data
         averages = compute_averages(monthly_data)
 
-        categories = [{"name": n, "avg": averages.get(n, 0)} for n in category_names]
+        categories = [{"name": n, "amount": averages.get(n, 0)} for n in category_names]
 
         return jsonify({
             "income": averages.get("income", 0),
