@@ -614,11 +614,11 @@
 
     <div class="income-box">
       Your Average Monthly Expenses: <span id="expenses-display">$0</span><br/>
-      Your Average Monthly Income: <span id="income-display">$0</span>
+      Your Total Income: <span id="income-display">$0</span>
     </div>
 
     <div id="month-selector" style="margin-bottom:16px;">
-      <p style="font-size:13px;font-weight:bold;margin-bottom:8px;">Which months should be averaged?</p>
+      <p style="font-size:13px;font-weight:bold;margin-bottom:8px;">Which months to include?</p>
       <div id="month-checkboxes" style="display:flex;gap:10px;flex-wrap:wrap;font-size:13px;"></div>
     </div>
 
@@ -684,7 +684,7 @@
 
   // ── State ─────────────────────────────────────────────────────────────────
   let selectedFile      = null;
-  let categories        = [];           // [{ name, avg }]
+  let categories        = [];           // [{ name, amount }]
   let assignments       = {};           // { cat_name: bucket_label }
   let tableData         = null;         // current rendered table data
   let originalTableData = null;         // snapshot at last save/generate
@@ -721,7 +721,7 @@
       }
 
       // Show expenses and income
-      const totalExpenses = data.categories.reduce((sum, c) => sum + c.avg, 0);
+      const totalExpenses = data.categories.reduce((sum, c) => sum + c.amount, 0);
       document.getElementById("expenses-display").textContent = formatDollar(totalExpenses);
       document.getElementById("income-display").textContent = formatDollar(data.income);
 
@@ -772,7 +772,7 @@
       info.className = "cat-info";
       info.innerHTML = `
         <div class="cat-name">${cat.name}</div>
-        <div class="cat-avg">Avg monthly: ${formatDollar(cat.avg)}</div>
+        <div class="cat-avg">Avg monthly: ${formatDollar(cat.amount)}</div>
       `;
 
       const choices = document.createElement("div");
@@ -893,7 +893,7 @@
     html += `<tr><td colspan="4" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">THE AWARENESS ENGINE — My Financial Reality</td></tr>`;
     html += `<tr class="spacer-row"><td colspan="4"></td></tr>`;
     html += `<tr>
-      <td style="font-weight:bold;">Average Monthly Income</td>
+      <td style="font-weight:bold;">Total Income</td>
       <td style="font-weight:bold;text-align:right;">${formatDollar(income)}</td>
       <td style="font-weight:bold;text-align:center;">100%</td>
       <td></td>
