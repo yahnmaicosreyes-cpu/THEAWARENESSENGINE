@@ -474,6 +474,60 @@
     .tmpl-reveal .reveal-nec { background: #f0f8fc; }
     .tmpl-reveal .reveal-lux { background: #f0faf4; }
     .tmpl-reveal .reveal-fs  { background: #fdf6ee; }
+
+    /* ── Home screen choice cards ───────────────────────────── */
+    .home-choice-card {
+      background: #f4f4f1;
+      border: 2px solid #e8e8e4;
+      border-radius: 14px;
+      padding: 28px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      flex: 1;
+      min-width: 200px;
+      max-width: 280px;
+    }
+    .home-choice-card:hover {
+      border-color: #0f1f3d;
+      background: white;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+    }
+    .home-choice-icon  { font-size: 36px; margin-bottom: 12px; }
+    .home-choice-title { font-size: 15px; font-weight: 700; color: #0f1f3d; margin-bottom: 8px; }
+    .home-choice-desc  { font-size: 13px; color: #666; line-height: 1.5; }
+
+    /* ── 3-Month builder extras ──────────────────────────────── */
+    .tm-setup-grid {
+      display: grid;
+      grid-template-columns: 180px 1fr 1fr 1fr;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 8px;
+      padding: 0 2px;
+    }
+    .tm-setup-label { font-weight: 600; font-size: 14px; }
+    .tm-month-name-input {
+      border: 1.5px solid #d0d0cc;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 13px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      width: 100%;
+      text-align: center;
+      font-weight: 600;
+      background: #f4f4f1;
+    }
+    .tm-income-input {
+      border: 1.5px solid #d0d0cc;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 13px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      width: 100%;
+      text-align: right;
+    }
   </style>
 </head>
 <body>
@@ -490,8 +544,47 @@
     <p>Upload your spreadsheet. Label your categories. Get the truth.</p>
   </div>
 
+  <!-- HOME SCREEN -->
+  <div class="card" id="home-screen">
+    <h2 style="text-align:center;border-bottom:none;font-size:18px;margin-bottom:6px;">How would you like to get started?</h2>
+    <p style="text-align:center;color:#666;font-size:14px;margin-bottom:28px;">Choose your path — use Start Over anytime to switch.</p>
+    <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
+      <div class="home-choice-card" onclick="chooseUpload()">
+        <div class="home-choice-icon">📂</div>
+        <div class="home-choice-title">Upload My Spreadsheet</div>
+        <div class="home-choice-desc">I already have budget data in a .xlsx file</div>
+      </div>
+      <div class="home-choice-card" onclick="chooseBuild()">
+        <div class="home-choice-icon">📋</div>
+        <div class="home-choice-title">Build My Budget</div>
+        <div class="home-choice-desc">I want to build a budget from scratch</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BUILDER CHOICE SCREEN -->
+  <div class="card hidden" id="builder-choice-screen">
+    <h2 style="text-align:center;border-bottom:none;font-size:18px;margin-bottom:6px;">Which builder?</h2>
+    <p style="text-align:center;color:#666;font-size:14px;margin-bottom:28px;">Choose how much data you want to work with.</p>
+    <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
+      <div class="home-choice-card" onclick="chooseSingleMonth()">
+        <div class="home-choice-icon">📋</div>
+        <div class="home-choice-title">Single Month Budget Builder</div>
+        <div class="home-choice-desc">Build a budget based on one month of expenses</div>
+      </div>
+      <div class="home-choice-card" onclick="chooseThreeMonth()">
+        <div class="home-choice-icon">📅</div>
+        <div class="home-choice-title">Last 3 Months Budget Builder</div>
+        <div class="home-choice-desc">Use 3 months of real data for a better average</div>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:20px;">
+      <button onclick="goHome()" style="background:none;border:none;color:#888;font-size:13px;cursor:pointer;font-family:'DM Sans',Arial,sans-serif;">← Back</button>
+    </div>
+  </div>
+
   <!-- STEP 1: Upload -->
-  <div class="card" id="step1-card">
+  <div class="card hidden" id="step1-card">
     <h2><span class="step-badge">1</span>Upload Your Spreadsheet</h2>
     <div class="upload-box" onclick="document.getElementById('file-input').click()">
       <label>📂 Click here to choose your .xlsx file</label>
@@ -506,11 +599,7 @@
     <div id="upload-msg"></div>
   </div>
 
-  <div style="text-align:center;margin:8px 0 4px;">
-    <button id="tmpl-toggle-btn" onclick="toggleTemplateBuilder()">📋 Build My Own Budget</button>
-  </div>
-
-  <!-- Budget Template Builder -->
+  <!-- Single Month Budget Builder -->
   <div class="card hidden" id="template-card">
     <h2>📋 Budget Template Builder</h2>
     <p style="color:#666;font-size:14px;margin-bottom:20px;">Don't have a spreadsheet yet? Build one here — edit the categories, add your amounts, then download it as a ready-to-use .xlsx file.</p>
@@ -606,6 +695,128 @@
 
     <button class="tmpl-dl-btn" onclick="tmplDownload()">⬇ Download Template (.xlsx)</button>
     <div id="tmpl-msg" style="margin-top:10px;font-size:13px;color:#c0392b;"></div>
+  </div>
+
+  <!-- Last 3 Months Budget Builder -->
+  <div class="card hidden" id="three-month-card">
+    <h2>📅 Last 3 Months Budget Builder</h2>
+    <p style="color:#666;font-size:14px;margin-bottom:20px;">Enter your actual expenses for the last 3 months. The engine averages them into a ready-to-upload budget template.</p>
+
+    <!-- Month names -->
+    <div class="tm-setup-grid" style="margin-bottom:4px;">
+      <div class="tm-setup-label"></div>
+      <input type="text" class="tm-month-name-input" id="tm-month1-name" value="Month 1" oninput="tmThreeUpdateHeaders()">
+      <input type="text" class="tm-month-name-input" id="tm-month2-name" value="Month 2" oninput="tmThreeUpdateHeaders()">
+      <input type="text" class="tm-month-name-input" id="tm-month3-name" value="Month 3" oninput="tmThreeUpdateHeaders()">
+    </div>
+    <!-- Income per month -->
+    <div class="tm-setup-grid" style="margin-bottom:24px;">
+      <div class="tm-setup-label">Monthly Income ($)</div>
+      <input type="number" class="tm-income-input" id="tm-income-1" placeholder="e.g. 4000" min="0" step="1" oninput="tmThreeRecalculate()">
+      <input type="number" class="tm-income-input" id="tm-income-2" placeholder="e.g. 4000" min="0" step="1" oninput="tmThreeRecalculate()">
+      <input type="number" class="tm-income-input" id="tm-income-3" placeholder="e.g. 4000" min="0" step="1" oninput="tmThreeRecalculate()">
+    </div>
+
+    <!-- Necessities -->
+    <div class="tmpl-bucket" data-bucket="Necessities">
+      <div class="tmpl-bucket-header">
+        <span>🏠 Necessities</span>
+        <span class="tmpl-bucket-pct" id="tm-pct-necessities">0%</span>
+      </div>
+      <table><thead><tr>
+        <th style="text-align:left;">Category</th>
+        <th class="tm-col-m1" style="text-align:right;">Month 1</th>
+        <th class="tm-col-m2" style="text-align:right;">Month 2</th>
+        <th class="tm-col-m3" style="text-align:right;">Month 3</th>
+        <th style="text-align:right;">Avg</th>
+        <th style="width:36px;"></th>
+      </tr></thead><tbody id="tm-rows-necessities"></tbody></table>
+      <div class="tmpl-subtotal">Avg Subtotal: <span id="tm-sub-necessities">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmThreeAddRow('Necessities')">+ Add Category</button>
+    </div>
+
+    <!-- Luxuries -->
+    <div class="tmpl-bucket" data-bucket="Luxuries">
+      <div class="tmpl-bucket-header">
+        <span>✨ Luxuries</span>
+        <span class="tmpl-bucket-pct" id="tm-pct-luxuries">0%</span>
+      </div>
+      <table><thead><tr>
+        <th style="text-align:left;">Category</th>
+        <th class="tm-col-m1" style="text-align:right;">Month 1</th>
+        <th class="tm-col-m2" style="text-align:right;">Month 2</th>
+        <th class="tm-col-m3" style="text-align:right;">Month 3</th>
+        <th style="text-align:right;">Avg</th>
+        <th style="width:36px;"></th>
+      </tr></thead><tbody id="tm-rows-luxuries"></tbody></table>
+      <div class="tmpl-subtotal">Avg Subtotal: <span id="tm-sub-luxuries">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmThreeAddRow('Luxuries')">+ Add Category</button>
+    </div>
+
+    <!-- Future Self -->
+    <div class="tmpl-bucket" data-bucket="Future Self">
+      <div class="tmpl-bucket-header">
+        <span>🚀 Future Self</span>
+        <span class="tmpl-bucket-pct" id="tm-pct-future-self">0%</span>
+      </div>
+      <table><thead><tr>
+        <th style="text-align:left;">Category</th>
+        <th class="tm-col-m1" style="text-align:right;">Month 1</th>
+        <th class="tm-col-m2" style="text-align:right;">Month 2</th>
+        <th class="tm-col-m3" style="text-align:right;">Month 3</th>
+        <th style="text-align:right;">Avg</th>
+        <th style="width:36px;"></th>
+      </tr></thead><tbody id="tm-rows-future-self"></tbody></table>
+      <div class="tmpl-subtotal">Avg Subtotal: <span id="tm-sub-future-self">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmThreeAddRow('Future Self')">+ Add Category</button>
+    </div>
+
+    <!-- Grand Reveal -->
+    <div class="tmpl-reveal">
+      <div class="tmpl-reveal-header">⚡ Grand Reveal (3-Month Average)</div>
+      <table>
+        <thead><tr><th>Bucket</th><th>Avg Amount</th><th>% of Avg Income</th><th>% of Spending</th></tr></thead>
+        <tbody>
+          <tr class="reveal-nec">
+            <td>🏠 Necessities</td>
+            <td id="tm-gr-amt-necessities">$0.00</td>
+            <td id="tm-gr-inc-necessities">0%</td>
+            <td id="tm-gr-spd-necessities">0%</td>
+          </tr>
+          <tr class="reveal-lux">
+            <td>✨ Luxuries</td>
+            <td id="tm-gr-amt-luxuries">$0.00</td>
+            <td id="tm-gr-inc-luxuries">0%</td>
+            <td id="tm-gr-spd-luxuries">0%</td>
+          </tr>
+          <tr class="reveal-fs">
+            <td>🚀 Future Self</td>
+            <td id="tm-gr-amt-future-self">$0.00</td>
+            <td id="tm-gr-inc-future-self">0%</td>
+            <td id="tm-gr-spd-future-self">0%</td>
+          </tr>
+          <tr>
+            <td>Total Expenses</td>
+            <td id="tm-gr-total-expenses">$0.00</td>
+            <td id="tm-gr-total-pct-inc">0%</td>
+            <td>100%</td>
+          </tr>
+          <tr id="tm-gr-remaining-row">
+            <td>💰 Remaining Income</td>
+            <td id="tm-gr-remaining">$0.00</td>
+            <td id="tm-gr-remaining-pct">0%</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="display:flex;justify-content:space-between;padding:10px 16px;font-size:13px;font-weight:600;background:#f4f4f1;border-top:1.5px solid #e8e8e4;">
+        <span>Avg Monthly Income</span>
+        <span id="tm-gr-total-income">$0.00</span>
+      </div>
+    </div>
+
+    <button class="tmpl-dl-btn" onclick="tmThreeDownload()">⬇ Download 3-Month Average Template (.xlsx)</button>
+    <div id="tm-msg" style="margin-top:10px;font-size:13px;color:#c0392b;"></div>
   </div>
 
   <!-- STEP 2: Assign Categories -->
@@ -1321,15 +1532,40 @@
     location.reload();
   }
 
-  // ── Budget Template Builder ───────────────────────────────────────────────
-  function toggleTemplateBuilder() {
-    const card = document.getElementById("template-card");
-    const btn  = document.getElementById("tmpl-toggle-btn");
-    const isHidden = card.classList.toggle("hidden");
-    btn.textContent = isHidden ? "📋 Build My Own Budget" : "✖ Close Budget Builder";
-    if (!isHidden) card.scrollIntoView({ behavior: "smooth" });
+  // ── Navigation ────────────────────────────────────────────────────────────
+  function goHome() {
+    document.getElementById("home-screen").classList.remove("hidden");
+    document.getElementById("builder-choice-screen").classList.add("hidden");
+    document.getElementById("step1-card").classList.add("hidden");
+    document.getElementById("template-card").classList.add("hidden");
+    document.getElementById("three-month-card").classList.add("hidden");
   }
 
+  function chooseUpload() {
+    document.getElementById("home-screen").classList.add("hidden");
+    document.getElementById("step1-card").classList.remove("hidden");
+    document.getElementById("step1-card").scrollIntoView({ behavior: "smooth" });
+  }
+
+  function chooseBuild() {
+    document.getElementById("home-screen").classList.add("hidden");
+    document.getElementById("builder-choice-screen").classList.remove("hidden");
+    document.getElementById("builder-choice-screen").scrollIntoView({ behavior: "smooth" });
+  }
+
+  function chooseSingleMonth() {
+    document.getElementById("builder-choice-screen").classList.add("hidden");
+    document.getElementById("template-card").classList.remove("hidden");
+    document.getElementById("template-card").scrollIntoView({ behavior: "smooth" });
+  }
+
+  function chooseThreeMonth() {
+    document.getElementById("builder-choice-screen").classList.add("hidden");
+    document.getElementById("three-month-card").classList.remove("hidden");
+    document.getElementById("three-month-card").scrollIntoView({ behavior: "smooth" });
+  }
+
+  // ── Single Month Budget Builder ───────────────────────────────────────────
   function tmplKey(bucket) { return bucket.replace(/\s+/g, "-").toLowerCase(); }
 
   const TMPL_DEFAULTS = {
@@ -1427,6 +1663,122 @@
   (function initTemplate() {
     ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
       TMPL_DEFAULTS[bucket].forEach(name => tmplAddRow(bucket, name, ""));
+    });
+  })();
+
+  // ── Last 3 Months Budget Builder ─────────────────────────────────────────
+  const TM_DEFAULTS = {
+    "Necessities": ["Rent / Mortgage", "Groceries", "Utilities", "Transportation", "Insurance", "Phone Bill"],
+    "Luxuries":    ["Dining Out", "Entertainment", "Shopping", "Subscriptions", "Personal Care"],
+    "Future Self": ["Emergency Fund", "Retirement (401k/IRA)", "Investments", "Education / Skills", "Debt Payoff"]
+  };
+
+  function tmThreeKey(bucket) { return bucket.replace(/\s+/g, "-").toLowerCase(); }
+
+  function tmThreeAddRow(bucket, name = "") {
+    const container = document.getElementById("tm-rows-" + tmThreeKey(bucket));
+    const row = document.createElement("tr");
+    row.className = "tmpl-row";
+    row.innerHTML = `
+      <td><input type="text" placeholder="Category name" value="${name}" oninput="tmThreeRecalculate()"></td>
+      <td style="width:110px;"><input type="number" placeholder="0.00" min="0" step="0.01" oninput="tmThreeRecalculate()"></td>
+      <td style="width:110px;"><input type="number" placeholder="0.00" min="0" step="0.01" oninput="tmThreeRecalculate()"></td>
+      <td style="width:110px;"><input type="number" placeholder="0.00" min="0" step="0.01" oninput="tmThreeRecalculate()"></td>
+      <td style="width:90px;text-align:right;font-weight:600;color:#0f1f3d;padding:6px 10px;" class="tm-row-avg">$0.00</td>
+      <td style="width:36px;text-align:center;"><button class="tmpl-remove-btn" onclick="this.closest('.tmpl-row').remove(); tmThreeRecalculate();" title="Remove">✕</button></td>
+    `;
+    container.appendChild(row);
+    tmThreeRecalculate();
+  }
+
+  function tmThreeUpdateHeaders() {
+    [1, 2, 3].forEach(i => {
+      const name = document.getElementById(`tm-month${i}-name`).value || `Month ${i}`;
+      document.querySelectorAll(`.tm-col-m${i}`).forEach(el => el.textContent = name);
+    });
+  }
+
+  function tmThreeRecalculate() {
+    tmThreeUpdateHeaders();
+    const incomes = [1, 2, 3].map(i => parseFloat(document.getElementById(`tm-income-${i}`).value) || 0);
+    const avgIncome = (incomes[0] + incomes[1] + incomes[2]) / 3;
+    const fmt = n => "$" + Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
+    const subtotalAvgs = {};
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const key = tmThreeKey(bucket);
+      const rows = document.querySelectorAll(`#tm-rows-${key} .tmpl-row`);
+      let sub1 = 0, sub2 = 0, sub3 = 0;
+      rows.forEach(row => {
+        const amts = row.querySelectorAll("input[type='number']");
+        const a1 = parseFloat(amts[0].value) || 0;
+        const a2 = parseFloat(amts[1].value) || 0;
+        const a3 = parseFloat(amts[2].value) || 0;
+        sub1 += a1; sub2 += a2; sub3 += a3;
+        row.querySelector(".tm-row-avg").textContent = fmt((a1 + a2 + a3) / 3);
+      });
+      const subAvg = (sub1 + sub2 + sub3) / 3;
+      subtotalAvgs[key] = subAvg;
+      document.getElementById(`tm-sub-${key}`).textContent = fmt(subAvg);
+      document.getElementById(`tm-pct-${key}`).textContent =
+        avgIncome > 0 ? ((subAvg / avgIncome) * 100).toFixed(1) + "%" : "0%";
+    });
+
+    const totalExp = Object.values(subtotalAvgs).reduce((a, b) => a + b, 0);
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const key = tmThreeKey(bucket);
+      const amt = subtotalAvgs[key];
+      document.getElementById(`tm-gr-amt-${key}`).textContent = fmt(amt);
+      document.getElementById(`tm-gr-inc-${key}`).textContent =
+        avgIncome > 0 ? ((amt / avgIncome) * 100).toFixed(1) + "%" : "0%";
+      document.getElementById(`tm-gr-spd-${key}`).textContent =
+        totalExp > 0 ? ((amt / totalExp) * 100).toFixed(1) + "%" : "0%";
+    });
+    document.getElementById("tm-gr-total-expenses").textContent = fmt(totalExp);
+    document.getElementById("tm-gr-total-pct-inc").textContent =
+      avgIncome > 0 ? ((totalExp / avgIncome) * 100).toFixed(1) + "%" : "0%";
+    document.getElementById("tm-gr-total-income").textContent = fmt(avgIncome);
+    const remaining = avgIncome - totalExp;
+    document.getElementById("tm-gr-remaining").textContent = formatDollar(remaining);
+    document.getElementById("tm-gr-remaining-pct").textContent =
+      avgIncome > 0 ? ((remaining / avgIncome) * 100).toFixed(1) + "%" : "0%";
+    document.getElementById("tm-gr-remaining-row").style.color = remaining < 0 ? "#c0392b" : "#145a32";
+  }
+
+  async function tmThreeDownload() {
+    const incomes = [1, 2, 3].map(i => parseFloat(document.getElementById(`tm-income-${i}`).value) || 0);
+    const monthNames = [1, 2, 3].map(i => document.getElementById(`tm-month${i}-name`).value.trim() || `Month ${i}`);
+    const buckets = {};
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const rows = document.querySelectorAll(`#tm-rows-${tmThreeKey(bucket)} .tmpl-row`);
+      buckets[bucket] = [];
+      rows.forEach(row => {
+        const name = row.querySelector("input[type='text']").value.trim() || "Category";
+        const amts = row.querySelectorAll("input[type='number']");
+        buckets[bucket].push({ name, amounts: [0, 1, 2].map(i => parseFloat(amts[i].value) || 0) });
+      });
+    });
+    const msgEl = document.getElementById("tm-msg");
+    msgEl.textContent = "";
+    try {
+      const resp = await fetch("/three-month/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ incomes, month_names: monthNames, buckets })
+      });
+      if (!resp.ok) throw new Error("Server error: " + resp.status);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "Last_3_Months_Budget.xlsx";
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    } catch (e) { msgEl.textContent = "Download failed: " + e.message; }
+  }
+
+  (function initThreeMonth() {
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      TM_DEFAULTS[bucket].forEach(name => tmThreeAddRow(bucket, name));
     });
   })();
 </script>

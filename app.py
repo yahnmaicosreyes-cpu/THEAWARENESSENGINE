@@ -1000,5 +1000,185 @@ def template_download():
                      download_name="Budget_Template.xlsx")
 
 
+@app.route("/three-month/download", methods=["POST"])
+def three_month_download():
+    data = request.get_json(force=True)
+    incomes = [float(v) for v in data.get("incomes", [0, 0, 0])]
+    month_names = data.get("month_names", ["Month 1", "Month 2", "Month 3"])
+    buckets_input = data.get("buckets", {})
+
+    avg_income = sum(incomes) / 3
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Budget Template"
+
+    header_font = Font(name="Calibri", bold=True, size=13, color="FFFFFF")
+    bucket_fonts = {
+        "Necessities":  Font(name="Calibri", bold=True, size=12, color="1A6380"),
+        "Luxuries":     Font(name="Calibri", bold=True, size=12, color="2E7D52"),
+        "Future Self":  Font(name="Calibri", bold=True, size=12, color="A0522D"),
+    }
+    bucket_fills = {
+        "Necessities":  PatternFill("solid", fgColor="DBF0F7"),
+        "Luxuries":     PatternFill("solid", fgColor="DAF2E5"),
+        "Future Self":  PatternFill("solid", fgColor="FEF0E0"),
+    }
+    header_fill  = PatternFill("solid", fgColor="0F1F3D")
+    thin         = Side(style="thin", color="CCCCCC")
+    border       = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center       = Alignment(horizontal="center", vertical="center")
+    right_align  = Alignment(horizontal="right",  vertical="center")
+
+    # Title
+    ws.merge_cells("A1:B1")
+    ws["A1"] = f"Last 3 Months Budget — {' / '.join(month_names)}"
+    ws["A1"].font      = header_font
+    ws["A1"].fill      = header_fill
+    ws["A1"].alignment = center
+
+    # Avg Income
+    ws["A2"] = "Avg Monthly Income"
+    ws["A2"].font   = Font(name="Calibri", bold=True, size=12)
+    ws["B2"]        = round(avg_income, 2)
+    ws["B2"].number_format = '"$"#,##0.00'
+    ws["B2"].alignment = right_align
+    ws["A2"].border = border
+    ws["B2"].border = border
+
+    row = 4
+    bucket_totals = {}
+    for bucket_name in BUCKET_LABELS:
+        cats = buckets_input.get(bucket_name, [])
+        ws.merge_cells(f"A{row}:B{row}")
+        ws[f"A{row}"]           = bucket_name.upper()
+        ws[f"A{row}"].font      = bucket_fonts[bucket_name]
+        ws[f"A{row}"].fill      = bucket_fills[bucket_name]
+        ws[f"A{row}"].alignment = center
+        ws[f"A{row}"].border    = border
+        row += 1
+
+        total = 0.0
+        for item in cats:
+            name    = item.get("name", "")
+            amounts = item.get("amounts", [0, 0, 0])
+            avg_amt = sum(amounts) / 3
+            total  += avg_amt
+            ws[f"A{row}"]              = name
+            ws[f"B{row}"]              = round(avg_amt, 2)
+            ws[f"B{row}"].number_format = '"$"#,##0.00'
+            ws[f"A{row}"].border       = border
+            ws[f"B{row}"].border       = border
+            ws[f"B{row}"].alignment    = right_align
+            row += 1
+
+        bucket_totals[bucket_name] = total
+        ws[f"A{row}"]              = "Subtotal"
+        ws[f"A{row}"].font         = Font(name="Calibri", bold=True, size=11)
+        ws[f"B{row}"]              = round(total, 2)
+        ws[f"B{row}"].number_format = '"$"#,##0.00'
+        ws[f"B{row}"].font         = Font(name="Calibri", bold=True, size=11)
+        ws[f"A{row}"].border       = border
+        ws[f"B{row}"].border       = border
+        ws[f"B{row}"].alignment    = right_align
+        row += 2
+
+    # Grand Reveal
+    row += 1
+    reveal_fill  = PatternFill("solid", fgColor="0F1F3D")
+    reveal_font  = Font(name="Calibri", bold=True, size=12, color="FFFFFF")
+    sub_hdr_fill = PatternFill("solid", fgColor="F4F4F1")
+    sub_hdr_font = Font(name="Calibri", bold=True, size=11)
+    total_fill   = PatternFill("solid", fgColor="2C3E50")
+    total_font_w = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
+
+    ws.merge_cells(f"A{row}:D{row}")
+    ws[f"A{row}"]           = "⚡ GRAND REVEAL (3-Month Average)"
+    ws[f"A{row}"].font      = reveal_font
+    ws[f"A{row}"].fill      = reveal_fill
+    ws[f"A{row}"].alignment = center
+    ws[f"A{row}"].border    = border
+    row += 1
+
+    for col, label in [("A", "Bucket"), ("B", "Avg Amount"),
+                        ("C", "% of Avg Income"), ("D", "% of Spending")]:
+        ws[f"{col}{row}"]           = label
+        ws[f"{col}{row}"].font      = sub_hdr_font
+        ws[f"{col}{row}"].fill      = sub_hdr_fill
+        ws[f"{col}{row}"].alignment = center
+        ws[f"{col}{row}"].border    = border
+    row += 1
+
+    total_spending = sum(bucket_totals.values())
+    for bucket_name, b_fill in bucket_fills.items():
+        amt     = bucket_totals[bucket_name]
+        pct_inc = round((amt / avg_income * 100), 1)    if avg_income    else 0.0
+        pct_spd = round((amt / total_spending * 100), 1) if total_spending else 0.0
+        ws[f"A{row}"] = bucket_name
+        ws[f"B{row}"] = round(amt, 2)
+        ws[f"C{row}"] = f"{pct_inc:.1f}%"
+        ws[f"D{row}"] = f"{pct_spd:.1f}%"
+        for col in ["A", "B", "C", "D"]:
+            ws[f"{col}{row}"].fill      = b_fill
+            ws[f"{col}{row}"].font      = Font(name="Calibri", bold=True, size=11)
+            ws[f"{col}{row}"].alignment = center
+            ws[f"{col}{row}"].border    = border
+        ws[f"B{row}"].number_format = '"$"#,##0.00'
+        row += 1
+
+    total_pct_inc = round((total_spending / avg_income * 100), 1) if avg_income else 0.0
+    ws[f"A{row}"] = "TOTAL EXPENSES"
+    ws[f"B{row}"] = round(total_spending, 2)
+    ws[f"C{row}"] = f"{total_pct_inc:.1f}%"
+    ws[f"D{row}"] = "100.0%"
+    for col in ["A", "B", "C", "D"]:
+        ws[f"{col}{row}"].font      = total_font_w
+        ws[f"{col}{row}"].fill      = total_fill
+        ws[f"{col}{row}"].alignment = center
+        ws[f"{col}{row}"].border    = border
+    ws[f"B{row}"].number_format = '"$"#,##0.00'
+
+    row += 1
+    remaining     = avg_income - total_spending
+    remaining_pct = round((remaining / avg_income * 100), 1) if avg_income else 0.0
+    if remaining >= 0:
+        rem_fill = PatternFill("solid", fgColor="D5F5E3")
+        rem_font = Font(name="Calibri", bold=True, size=11, color="145A32")
+    else:
+        rem_fill = PatternFill("solid", fgColor="FDECEA")
+        rem_font = Font(name="Calibri", bold=True, size=11, color="C0392B")
+    ws[f"A{row}"] = "Remaining Income"
+    ws[f"B{row}"] = round(remaining, 2)
+    ws[f"C{row}"] = f"{remaining_pct:.1f}%"
+    ws[f"D{row}"] = "—"
+    for col in ["A", "B", "C", "D"]:
+        ws[f"{col}{row}"].fill      = rem_fill
+        ws[f"{col}{row}"].font      = rem_font
+        ws[f"{col}{row}"].alignment = center
+        ws[f"{col}{row}"].border    = border
+    ws[f"B{row}"].number_format = '"$"#,##0.00'
+
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["D"].width = 16
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    wb.save(tmp.name)
+    tmp.close()
+    tmp_path = tmp.name
+
+    @after_this_request
+    def cleanup_three(response):
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        return response
+
+    return send_file(tmp_path, as_attachment=True,
+                     download_name="Last_3_Months_Budget.xlsx")
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=5050)
