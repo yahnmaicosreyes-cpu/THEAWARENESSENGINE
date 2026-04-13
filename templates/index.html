@@ -1306,9 +1306,15 @@
         // Update displayed amount
         amtCell.textContent = formatDollar(val);
 
+        // nMonths: used to scale avg→total so % of Income stays on the same
+        // scale as total income (avoids avg/total dimensional mismatch).
+        const income  = tableData.income;
+        const nMonths = (tableData.total_spending > 0)
+          ? tableData.total_raw_spending / tableData.total_spending : 1;
+        const pctOfIncome = (avg, inc) => inc ? ((avg * nMonths / inc) * 100).toFixed(1) : "0.0";
+
         // Update % of income in this row
-        const income = tableData.income;
-        const pct = income ? ((val / income) * 100).toFixed(1) : "0.0";
+        const pct = pctOfIncome(val, income);
         row.querySelector(".cat-pct").textContent = pct + "%";
 
         // Recalculate bucket total row
@@ -1327,7 +1333,7 @@
           if (firstTd && firstTd.textContent.trim() === totalLabel) {
             const cells = r.querySelectorAll("td");
             cells[2].textContent = formatDollar(bucketTotal);
-            cells[3].textContent = income ? ((bucketTotal / income) * 100).toFixed(1) + "%" : "0.0%";
+            cells[3].textContent = pctOfIncome(bucketTotal, income) + "%";
           }
         });
 
@@ -1351,7 +1357,7 @@
               const cells = r.querySelectorAll("td");
               cells[2].textContent = formatDollar(allBuckets[b]);
               cells[3].textContent = totalSpending ? ((allBuckets[b] / totalSpending) * 100).toFixed(1) + "%" : "0.0%";
-              cells[4].textContent = income ? ((allBuckets[b] / income) * 100).toFixed(1) + "%" : "0.0%";
+              cells[4].textContent = pctOfIncome(allBuckets[b], income) + "%";
             }
           });
 
@@ -1359,7 +1365,7 @@
           if (label === "TOTAL SPENDING") {
             const cells = r.querySelectorAll("td");
             cells[2].textContent = formatDollar(totalSpending);
-            cells[4].textContent = income ? ((totalSpending / income) * 100).toFixed(1) + "%" : "0.0%";
+            cells[4].textContent = pctOfIncome(totalSpending, income) + "%";
           }
         });
 
@@ -1384,7 +1390,9 @@
         const bubble = this.closest(".slider-wrap")?.querySelector(".slider-bubble");
         if (bubble) {
           const income = tableData ? tableData.income : 0;
-          const pct = income ? ((parseFloat(this.value) / income) * 100).toFixed(1) : "0.0";
+          const nMonths = (tableData && tableData.total_spending > 0)
+            ? tableData.total_raw_spending / tableData.total_spending : 1;
+          const pct = income ? ((parseFloat(this.value) * nMonths / income) * 100).toFixed(1) : "0.0";
           const pos = (this.value - this.min) / (this.max - this.min);
           bubble.style.left = `calc(${pos * 100}% + ${8 - pos * 16}px)`;
           bubble.textContent = pct + "%";
