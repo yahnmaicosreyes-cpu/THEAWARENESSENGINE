@@ -709,6 +709,10 @@ def upload():
     try:
         f.save(tmp.name)
         monthly_data, category_names = extract_data(tmp.name)
+        # Deduplicate category names (preserving order) in case the spreadsheet
+        # lists the same category more than once under the same month.
+        seen = set()
+        category_names = [n for n in category_names if not (n in seen or seen.add(n))]
         session["monthly_data"] = monthly_data
         averages = compute_averages(monthly_data)
 
