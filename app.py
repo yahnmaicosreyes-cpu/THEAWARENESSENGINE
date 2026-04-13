@@ -580,7 +580,7 @@ def build_output_xlsx(averages, assignments, totals=None):
         bucket_total = sum(averages.get(c, 0) for c in cats)
         bucket_raw_total = sum(totals.get(c, 0) for c in cats)
         pct_spending = (bucket_total / all_spent) * 100 if all_spent else 0
-        pct_income   = (bucket_total / income)    * 100 if income    else 0
+        pct_income   = (bucket_raw_total / income) * 100 if income    else 0
         ws[f"A{current_row}"] = bucket_name.upper()
         ws[f"B{current_row}"] = bucket_raw_total
         ws[f"C{current_row}"] = bucket_total
@@ -650,7 +650,7 @@ def build_table_data(averages, assignments, totals=None):
                        "raw_total": round(totals.get(cat, 0), 2)} for cat in cats]
         bucket_total = round(sum(c["amt"] for c in categories), 2)
         bucket_raw_total = round(sum(c["raw_total"] for c in categories), 2)
-        pct_income = round((bucket_total / income * 100), 1) if income else 0.0
+        pct_income = round((bucket_raw_total / income * 100), 1) if income else 0.0
         buckets_out.append({
             "name": bucket_name,
             "categories": categories,
@@ -683,7 +683,7 @@ def build_table_data(averages, assignments, totals=None):
         "total_spending": all_spent,
         "total_raw_spending": all_raw_spent,
         "remaining_income": remaining_income,
-        "total_pct_income": round((all_spent / income * 100), 1) if income else 0.0
+        "total_pct_income": round((all_raw_spent / income * 100), 1) if income else 0.0
     }
 
 

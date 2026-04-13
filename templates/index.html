@@ -1127,7 +1127,7 @@
         html += `<tr><td colspan="4" style="background:${color};color:#888;">(No categories assigned)</td><td style="background:${color};"></td></tr>`;
       } else {
         bucket.categories.forEach(cat => {
-          const pct = income ? ((cat.amt / income) * 100).toFixed(1) : "0.0";
+          const pct = income ? ((cat.raw_total / income) * 100).toFixed(1) : "0.0";
           html += `<tr class="cat-data-row" data-bucket="${escapeHtml(bucket.name)}">
             <td class="editable" contenteditable="true" style="background:${color};" data-field="name">${escapeHtml(cat.name)}</td>
             <td style="background:${color};text-align:right;" data-field="raw_total">${formatDollar(cat.raw_total)}</td>
