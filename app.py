@@ -1,5 +1,6 @@
 import os
 import secrets
+from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file, session, after_this_request
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -214,6 +215,95 @@ def _is_yyyy_month_template(wb, sheet_name_map):
     return False
 
 
+def _is_daily_tracking_template(wb, sheet_name_map):
+    """Detect if this workbook uses the daily-tracking format.
+    Signature: plain month-name sheets (JAN/FEB etc.), row 1 has a date in col C,
+    and a TOTALS column header exists in row 1."""
+    for standard, actual in sheet_name_map.items():
+        ws = wb[actual]
+        row1_c = ws.cell(1, 3).value
+        has_date = isinstance(row1_c, datetime) or (
+            isinstance(row1_c, str) and re.match(r'^\d{4}-\d{2}-\d{2}', row1_c.strip())
+        )
+        if has_date and _find_totals_col(ws) is not None:
+            return True
+    return False
+
+
+def _extract_daily_tracking(wb, sheet_name_map, months):
+    """Extract data from the daily-tracking format.
+    - Category labels are read from the JAN sheet only (other sheets use =JAN!Axx formulas)
+    - Income and expense amounts are summed from raw daily columns (B up to TOTALS col)
+    - Handles variable month lengths automatically
+    - Works whether file was saved from Excel or Google Sheets (no formula cache needed)
+    """
+    # Get category labels from JAN sheet (the only sheet with plain text labels)
+    jan_ws = wb[sheet_name_map["JAN"]]
+    row_labels = {}
+    for row_idx in range(1, jan_ws.max_row + 1):
+        val = jan_ws.cell(row_idx, 1).value
+        if val and isinstance(val, str) and val.strip():
+            row_labels[row_idx] = val.strip()
+
+    # Find the TOTALS col in JAN to know where daily columns end
+    jan_totals_col = _find_totals_col(jan_ws)
+    if jan_totals_col is None:
+        return {}, []
+
+    results = {}
+    ordered_cats = []
+
+    for month in months:
+        ws = wb[sheet_name_map[month]]
+        totals_col = _find_totals_col(ws)
+        if totals_col is None:
+            continue
+
+        month_data = {"income": 0.0}
+        cat_order_this_month = []
+
+        for row_idx, label in row_labels.items():
+            label_upper = label.upper()
+
+            # Skip structural rows
+            if any(label_upper.startswith(p) for p in _SKIP_PREFIXES):
+                continue
+            if label_upper.strip() in ("INCOME", "TOTAL INCOME BEFORE TAXES",
+                                       "EXPENSES BY D.A. CATEGORIES", "TOTAL EXPENSES"):
+                continue
+            # Skip numbered section headers like "1 - SPIRITUAL"
+            if re.match(r'^\d+\s*[-\u2013]\s*\w+', label):
+                continue
+
+            # Sum raw daily values from col B up to (but not including) TOTALS col
+            total = 0.0
+            for col_idx in range(2, totals_col):
+                val = ws.cell(row_idx, col_idx).value
+                if isinstance(val, (int, float)):
+                    total += val
+            total = round(total, 2)
+
+            if total == 0.0:
+                continue
+
+            canonical = _match_known_category(label)
+            name = canonical if canonical else label
+
+            if "INCOME" in label_upper:
+                month_data["income"] = round(month_data["income"] + total, 2)
+            else:
+                month_data[name] = round(month_data.get(name, 0.0) + total, 2)
+                if name not in cat_order_this_month:
+                    cat_order_this_month.append(name)
+
+        if not ordered_cats:
+            ordered_cats = cat_order_this_month
+
+        results[month] = month_data
+
+    return results, ordered_cats
+
+
 def _find_spend_col(ws):
     """For the YYYY Month template: find the column in row 11 matching a spend keyword.
     Returns (col_index, data_start_row) or (None, None)."""
@@ -318,6 +408,10 @@ def extract_data(filepath):
     # ── Option B: Detect and handle the YYYY Month template as a special case ──
     if _is_yyyy_month_template(wb, sheet_name_map):
         return _extract_yyyy_month(wb, sheet_name_map, months)
+
+    # ── Option C: Detect and handle the daily-tracking template ───────────────
+    if _is_daily_tracking_template(wb, sheet_name_map):
+        return _extract_daily_tracking(wb, sheet_name_map, months)
 
     # ── Standard extraction ────────────────────────────────────────────────────
     results = {}
