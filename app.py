@@ -291,7 +291,7 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
     for row_idx in sorted(row_labels.keys()):
         label = row_labels[row_idx]
         cell = jan_ws.cell(row_idx, 1)
-        if label.strip().upper() == "INCOME" or label.strip().upper() == "INCOME ":
+        if label.strip().upper() == "INCOME":
             in_income_section = True
             continue
         if in_income_section:
@@ -323,8 +323,11 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
                                "EXPENSES BY D.A. CATEGORIES", "TOTAL EXPENSES"):
                 continue
             # Skip numbered section headers like "1 - SPIRITUAL", "2 - Needs"
+            # Exception: if the TOTALS column has a real value, it's an actual category — keep it
             if re.match(r'^\d+\s*[-\u2013]\s*\w+', label):
-                continue
+                totals_check = ws.cell(row_idx, totals_col).value
+                if not isinstance(totals_check, (int, float)) or totals_check == 0:
+                    continue
 
             total = _read_row_total(ws, row_idx, totals_col)
 
