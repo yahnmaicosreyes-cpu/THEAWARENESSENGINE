@@ -196,5 +196,12 @@ def three_month_download():
     return send_file(tmp_path, as_attachment=True, download_name="Last_3_Months_Budget.xlsx")
 
 
+@app.route("/download/inspiration-template")
+def inspiration_template():
+    path = os.path.join(os.path.dirname(__file__), "SpreadSheet Budget Template.xlsx")
+    return send_file(path, as_attachment=True,
+                     download_name="Awareness_Engine_Budget_Template.xlsx")
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=5050)
