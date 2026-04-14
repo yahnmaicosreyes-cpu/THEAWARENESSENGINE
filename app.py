@@ -267,7 +267,8 @@ def _read_row_total(ws, row_idx, totals_col):
 def _extract_daily_tracking(wb, sheet_name_map, months):
     """Extract data from the daily-tracking format.
     - Category labels are read from the JAN sheet only (other sheets use =JAN!Axx formulas)
-    - Scans col A for 'income' header (case-insensitive), reads sub-rows until next bold+colored header
+    - Income is always collected individually (sub-rows between income header and next bold+colored header)
+    - Expenses: prioritize bold+colored header rows. If none found, fall back to hardcoded known names
     - Dual-calculation: compares own daily sum vs TOTALS col, trusts own sum if mismatch
     - Handles variable month lengths automatically
     - Works whether file was saved from Excel or Google Sheets (no formula cache needed)
@@ -284,8 +285,8 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
     if jan_totals_col is None:
         return {}, []
 
-    # Find income section: locate the 'income' header (case-insensitive) in col A,
-    # then collect sub-rows until the next bold+colored header cell
+    # ── Identify income rows ──────────────────────────────────────────────────
+    # Collect sub-rows between 'income' header and the next bold+colored header
     income_rows = set()
     in_income_section = False
     for row_idx in sorted(row_labels.keys()):
@@ -295,11 +296,30 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
             in_income_section = True
             continue
         if in_income_section:
-            # Stop at the next bold+colored header
             if _is_bold_colored_header(cell):
                 in_income_section = False
             else:
                 income_rows.add(row_idx)
+
+    # ── Identify expense rows ─────────────────────────────────────────────────
+    # Priority 1: bold+colored header rows (these are the main categories)
+    # Priority 2: fall back to hardcoded known category names if no bold+colored found
+    bold_colored_expense_rows = set()
+    for row_idx, label in row_labels.items():
+        if row_idx in income_rows:
+            continue
+        cell = jan_ws.cell(row_idx, 1)
+        if _is_bold_colored_header(cell):
+            label_upper = label.upper().strip()
+            # Exclude structural headers
+            if any(label_upper.startswith(p) for p in _SKIP_PREFIXES):
+                continue
+            if label_upper in ("INCOME", "TOTAL INCOME BEFORE TAXES",
+                               "EXPENSES BY D.A. CATEGORIES", "TOTAL EXPENSES"):
+                continue
+            bold_colored_expense_rows.add(row_idx)
+
+    use_bold_colored = len(bold_colored_expense_rows) > 0
 
     results = {}
     ordered_cats = []
@@ -316,33 +336,40 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
         for row_idx, label in row_labels.items():
             label_upper = label.upper().strip()
 
-            # Skip structural/header rows
+            # Skip structural/header rows always
             if any(label_upper.startswith(p) for p in _SKIP_PREFIXES):
                 continue
             if label_upper in ("INCOME", "TOTAL INCOME BEFORE TAXES",
                                "EXPENSES BY D.A. CATEGORIES", "TOTAL EXPENSES"):
                 continue
-            # Skip numbered section headers like "1 - SPIRITUAL", "2 - Needs"
-            # Exception: if the TOTALS column has a real value, it's an actual category — keep it
-            if re.match(r'^\d+\s*[-\u2013]\s*\w+', label):
-                totals_check = ws.cell(row_idx, totals_col).value
-                if not isinstance(totals_check, (int, float)) or totals_check == 0:
+
+            # ── Income rows — always collected individually ────────────────
+            if row_idx in income_rows:
+                total = _read_row_total(ws, row_idx, totals_col)
+                if total == 0.0:
+                    continue
+                month_data["income"] = round(month_data["income"] + total, 2)
+                continue
+
+            # ── Expense rows — bold+colored priority or fallback ───────────
+            if use_bold_colored:
+                # Only read bold+colored header rows, skip everything else
+                if row_idx not in bold_colored_expense_rows:
+                    continue
+            else:
+                # Fallback: only read rows matching hardcoded known category names
+                if not _match_known_category(label):
                     continue
 
             total = _read_row_total(ws, row_idx, totals_col)
-
             if total == 0.0:
                 continue
 
-            # Route to income or expense based on position in income section
-            if row_idx in income_rows:
-                month_data["income"] = round(month_data["income"] + total, 2)
-            else:
-                canonical = _match_known_category(label)
-                name = canonical if canonical else label
-                month_data[name] = round(month_data.get(name, 0.0) + total, 2)
-                if name not in cat_order_this_month:
-                    cat_order_this_month.append(name)
+            canonical = _match_known_category(label)
+            name = canonical if canonical else label
+            month_data[name] = round(month_data.get(name, 0.0) + total, 2)
+            if name not in cat_order_this_month:
+                cat_order_this_month.append(name)
 
         if not ordered_cats:
             ordered_cats = cat_order_this_month
