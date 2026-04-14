@@ -134,11 +134,68 @@ function renderBarChart(data) {
   const colors = data.buckets.map(b => BUCKET_COLORS[b.name] || "#ccc");
   const borderColors = ["#4fa8bc", "#5fa87c", "#d47a56"];
 
+  // Top-spending category per bucket (by avg monthly amount)
+  const topCategories = data.buckets.map(b =>
+    b.categories.length
+      ? b.categories.reduce((max, c) => c.amt > max.amt ? c : max)
+      : null
+  );
+
   document.getElementById("bar-container").classList.remove("hidden");
 
   if (barChartInstance) {
     barChartInstance.destroy();
   }
+
+  // Custom HTML tooltip — enables bolded $ amount and top-expense line
+  const tooltipHandler = (context) => {
+    const { chart, tooltip } = context;
+    let el = chart.canvas.parentNode.querySelector('.bar-tooltip');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'bar-tooltip';
+      el.style.cssText = [
+        'position:absolute',
+        'background:#0f1f3d',
+        'color:white',
+        'border-radius:10px',
+        'padding:10px 14px',
+        'font-family:DM Sans,Arial,sans-serif',
+        'font-size:13px',
+        'pointer-events:none',
+        'transition:opacity 0.15s',
+        'z-index:100',
+        'min-width:170px',
+        'box-shadow:0 4px 16px rgba(0,0,0,0.25)',
+        'white-space:nowrap'
+      ].join(';');
+      chart.canvas.parentNode.style.position = 'relative';
+      chart.canvas.parentNode.appendChild(el);
+    }
+
+    if (tooltip.opacity === 0) {
+      el.style.opacity = '0';
+      return;
+    }
+
+    const i = tooltip.dataPoints[0].dataIndex;
+    const top = topCategories[i];
+    el.innerHTML = `
+      <div style="margin-bottom:4px;opacity:0.8;font-size:12px;">${pcts[i]}% of spending</div>
+      <div style="font-size:18px;font-weight:700;letter-spacing:0.3px;">${formatDollar(values[i])}</div>
+      ${top ? `
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.2);font-size:12px;">
+        ★ Top expense<br>
+        <strong>${escapeHtml(top.name)}</strong><br>
+        <span style="opacity:0.75;">${formatDollar(top.amt)}/mo avg</span>
+      </div>` : ''}
+    `;
+
+    const { offsetLeft: posX, offsetTop: posY } = chart.canvas;
+    el.style.opacity = '1';
+    el.style.left = (posX + tooltip.caretX + 14) + 'px';
+    el.style.top  = (posY + tooltip.caretY - 10) + 'px';
+  };
 
   barChartInstance = new Chart(document.getElementById("bar-chart"), {
     type: "bar",
@@ -164,9 +221,8 @@ function renderBarChart(data) {
           color: '#333'
         },
         tooltip: {
-          callbacks: {
-            label: ctx => ` ${ctx.parsed.y}% — ${formatDollar(values[ctx.dataIndex])}`
-          }
+          enabled: false,
+          external: tooltipHandler
         }
       },
       scales: {

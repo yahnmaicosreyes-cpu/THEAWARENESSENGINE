@@ -41,7 +41,7 @@ async function uploadFile() {
     const data = await res.json();
 
     if (data.error) {
-      msg.innerHTML = `<div class="msg msg-error">❌ ${data.error}</div>`;
+      msg.innerHTML = `<div class="msg msg-error">❌ ${escapeHtml(data.error)}</div>`;
       btn.disabled = false;
       btn.textContent = "Scan My Spreadsheet";
       return;
@@ -58,7 +58,7 @@ async function uploadFile() {
     data.months_found.forEach(m => {
       const label = document.createElement("label");
       label.style.cssText = "display:flex;align-items:center;gap:4px;cursor:pointer;";
-      label.innerHTML = `<input type="checkbox" value="${m}" checked> ${m}`;
+      label.innerHTML = `<input type="checkbox" value="${escapeHtml(m)}" checked> ${escapeHtml(m)}`;
       monthBox.appendChild(label);
     });
 
@@ -74,7 +74,7 @@ async function uploadFile() {
 
     btn.innerHTML = "✅ Done";
     msg.innerHTML =
-      `<div class="msg msg-success">✅ Found data from: ${data.months_found.join(", ")}</div>`;
+      `<div class="msg msg-success">✅ Found data from: ${data.months_found.map(escapeHtml).join(", ")}</div>`;
     return;
 
   } catch (e) {
@@ -98,7 +98,7 @@ function buildCategoryRows(cats) {
     const info = document.createElement("div");
     info.className = "cat-info";
     info.innerHTML = `
-      <div class="cat-name">${cat.name}</div>
+      <div class="cat-name">${escapeHtml(cat.name)}</div>
       <div class="cat-avg">Avg monthly: ${formatDollar(cat.amount)}</div>
     `;
 
@@ -173,7 +173,7 @@ async function generateReport() {
     const data = await res.json();
 
     if (data.error) {
-      msg.innerHTML = `<div class="msg msg-error">❌ ${data.error}</div>`;
+      msg.innerHTML = `<div class="msg msg-error">❌ ${escapeHtml(data.error)}</div>`;
       btn.disabled = false;
       btn.textContent = "⚡ Generate My Awareness Report";
       return;
@@ -259,7 +259,7 @@ async function confirmSave() {
     const data = await res.json();
 
     if (data.error) {
-      msg.innerHTML = `<div class="msg msg-error">❌ ${data.error}</div>`;
+      msg.innerHTML = `<div class="msg msg-error">❌ ${escapeHtml(data.error)}</div>`;
       return;
     }
 

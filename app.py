@@ -18,6 +18,10 @@ from excel_builders import build_output_xlsx, build_single_month_template, build
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+app.config["SESSION_COOKIE_SECURE"]   = True   # only send cookie over HTTPS
+app.config["SESSION_COOKIE_HTTPONLY"] = True   # block JavaScript from reading the cookie
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # block cross-site request forgery
+app.config["MAX_CONTENT_LENGTH"]      = 10 * 1024 * 1024  # 10 MB upload limit
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
