@@ -1,1358 +1,1794 @@
-import os
-import secrets
-from datetime import datetime
-from flask import Flask, render_template, request, jsonify, send_file, session, after_this_request
-from openpyxl import load_workbook, Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-import re
-import tempfile
-
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
-
-ALL_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-              "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
-
-# Maps any variation of a month name (short or full, any case) -> standard key
-_MONTH_ALIASES = {
-    "JAN": "JAN", "JANUARY": "JAN",
-    "FEB": "FEB", "FEBRUARY": "FEB",
-    "MAR": "MAR", "MARCH": "MAR",
-    "APR": "APR", "APRIL": "APR",
-    "MAY": "MAY",
-    "JUN": "JUN", "JUNE": "JUN",
-    "JUL": "JUL", "JULY": "JUL",
-    "AUG": "AUG", "AUGUST": "AUG",
-    "SEP": "SEP", "SEPT": "SEP", "SEPTEMBER": "SEP",
-    "OCT": "OCT", "OCTOBER": "OCT",
-    "NOV": "NOV", "NOVEMBER": "NOV",
-    "DEC": "DEC", "DECEMBER": "DEC",
-}
-
-# Column-A labels that are structural dividers, not spendable categories.
-# Matched with startswith so partial labels like "EXPENSES BY D.A." are caught.
-_SKIP_PREFIXES = ("ATM WITHDRAWALS", "EXPENSES")
-
-_EXCLUDED_COLORS = {"00000000", "FFFFFFFF", "FFF3F3F3"}
-
-BUCKET_LABELS = ["Necessities", "Luxuries", "Future Self"]
-
-# Known category keywords — recognized regardless of formatting, bold, or case.
-# Each entry is a tuple of (canonical_name, [aliases...]).
-# The canonical name is what gets stored; aliases are what we match against.
-_KNOWN_CATEGORIES = [
-    ("Spiritual",         ["spiritual"]),
-    ("Shelter",           ["shelter"]),
-    ("Utilities",         ["utilities"]),
-    ("Internet",          ["internet"]),
-    ("Food",              ["food"]),
-    ("Home Items",        ["home items", "home item"]),
-    ("Groceries",         ["groceries", "grocery"]),
-    ("Transportation",    ["transportation"]),
-    ("Phone Bill",        ["phone bill"]),
-    ("Laundry",           ["laundry"]),
-    ("Storage",           ["storage"]),
-    ("Moving",            ["moving"]),
-    ("Gym",               ["gym"]),
-    ("Clothing",          ["clothing"]),
-    ("Personal Care",     ["personal care"]),
-    ("Health Care",       ["health care", "healthcare"]),
-    ("Inner Child",       ["inner child"]),
-    ("Entertainment",     ["entertainment"]),
-    ("Education",         ["education"]),
-    ("Vacation",          ["vacation", "vacations"]),
-    ("Personal Business", ["personal business"]),
-    ("Gifts",             ["gifts"]),
-    ("Investments",       ["investments", "investment"]),
-    ("Taxes",             ["taxes"]),
-    ("Debt Repayment",    ["debt repayment"]),
-    ("Prudent Reserve",   ["prudent reserve"]),
-    ("Subscriptions",     ["subscriptions", "subscription"]),
-    ("Dining Out",        ["dining out", "eating out", "dine out"]),
-    ("Take Out",          ["take out", "takeout", "takeaway", "to go"]),
-]
-
-# Flat lookup: lowercase alias -> canonical name
-_KNOWN_CATEGORY_LOOKUP = {
-    alias: canonical
-    for canonical, aliases in _KNOWN_CATEGORIES
-    for alias in aliases
-}
-
-
-def _match_known_category(value):
-    """Return the canonical category name if the cell value matches a known category,
-    otherwise return None. Matching is case-insensitive and strips whitespace."""
-    if not value:
-        return None
-    normalized = str(value).strip().lower()
-    # Exact match first
-    if normalized in _KNOWN_CATEGORY_LOOKUP:
-        return _KNOWN_CATEGORY_LOOKUP[normalized]
-    # Partial match — cell value starts with a known alias (handles "Groceries/Grocery" etc.)
-    for alias, canonical in _KNOWN_CATEGORY_LOOKUP.items():
-        if normalized.startswith(alias):
-            return canonical
-    return None
-
-
-def _find_totals_col(ws):
-    """Return the column index of the TOTALS header in row 1, or None.
-    Matches 'Total', 'TOTALS', 'total', etc. case-insensitively."""
-    for cell in ws[1]:
-        if cell.value and str(cell.value).strip().upper().startswith("TOTAL"):
-            return cell.column
-    return None
-
-
-def _is_category_header(cell):
-    """True if the cell looks like a top-level category header.
-    Matches either:
-      1. A known category name (case-insensitive, no formatting required), or
-      2. Bold + distinctly colored fill (original formatting-based rule).
-    Excludes white and near-white fills used for alternating sub-item rows."""
-    if not cell.value:
-        return False
-    # Rule 1: known category name — no formatting required
-    if _match_known_category(cell.value):
-        return True
-    # Rule 2: bold + solid colored fill (original rule)
-    if not (cell.font and cell.font.bold):
-        return False
-    fill = cell.fill
-    if fill.fill_type != "solid":
-        return False
-    fg = fill.fgColor
-    if fg.type == "theme":
-        return True
-    return fg.rgb not in _EXCLUDED_COLORS
-
-
-def _sum_col(ws, row_start, row_end, col):
-    """Sum numeric values in a single column over a row range."""
-    total = 0.0
-    for (val,) in ws.iter_rows(min_row=row_start, max_row=row_end,
-                                min_col=col, max_col=col, values_only=True):
-        if isinstance(val, (int, float)):
-            total += val
-    return round(total, 2)
-
-
-def extract_simple(wb):
-    """Parse a simple 2-column budget workbook (no month sheets).
-    Expects: col A = category name, col B = amount.
-    Treats rows containing 'income' as income; skips bucket headers and subtotals."""
-    ws = wb.active
-    _SKIP_WORDS = {"necessities", "luxuries", "future self", "subtotal", "total", "budget template"}
-
-    income = 0.0
-    categories = {}
-    ordered_cats = []
-
-    for row in ws.iter_rows(min_row=1, values_only=True):
-        name = row[0]
-        amt  = row[1] if len(row) > 1 else None
-
-        if not name or not isinstance(name, str):
-            continue
-        name = name.strip()
-        if not name:
-            continue
-
-        name_lower = name.lower()
-
-        # Skip structural rows
-        if any(name_lower == w or name_lower.startswith(w) for w in _SKIP_WORDS):
-            continue
-
-        if not isinstance(amt, (int, float)) or amt <= 0:
-            continue
-
-        if "income" in name_lower:
-            income = float(amt)
-        else:
-            categories[name] = round(float(amt), 2)
-            ordered_cats.append(name)
-
-    monthly_data = {"BUDGET": {"income": income, **categories}}
-    return monthly_data, ordered_cats
-
-
-# Spend-column keywords for the YYYY Month template (Option B)
-_SPEND_KEYWORDS = {"total", "totals", "spent", "spend", "monthly spend", "monthly spent"}
-
-
-def _strip_year_prefix(name):
-    """Strip a leading year (2020-2035) from a sheet name, e.g. '2025 May' -> 'MAY'.
-    Returns the uppercased remainder, or the original uppercased name if no year found."""
-    match = re.match(r'^(20[2-3][0-9])\s+(.+)$', name.strip())
-    if match:
-        return match.group(2).strip().upper()
-    return name.strip().upper()
-
-
-def _is_yyyy_month_template(wb, sheet_name_map):
-    """Detect if this workbook uses the 'YYYY Month' style template.
-    Requires ALL three conditions to be true to avoid false positives:
-      1. At least one sheet name had a year prefix (2020-2035) stripped
-      2. Row 11 col A contains 'SPENDING'
-      3. Row 11 contains a spend-keyword column header"""
-    has_year_prefix = any(
-        re.match(r'^(20[2-3][0-9])\s+', actual.strip())
-        for actual in sheet_name_map.values()
-    )
-    if not has_year_prefix:
-        return False
-
-    for standard, actual in sheet_name_map.items():
-        ws = wb[actual]
-        cell_a11 = ws.cell(11, 1).value
-        if cell_a11 and str(cell_a11).strip().upper() == "SPENDING":
-            for c in range(1, ws.max_column + 1):
-                val = ws.cell(11, c).value
-                if val and str(val).strip().lower() in _SPEND_KEYWORDS:
-                    return True
-    return False
-
-
-def _is_daily_tracking_template(wb, sheet_name_map):
-    """Detect if this workbook uses the daily-tracking format.
-    Signature: plain month-name sheets (JAN/FEB etc.), row 1 has a date in col C,
-    and a TOTALS column header exists in row 1."""
-    for standard, actual in sheet_name_map.items():
-        ws = wb[actual]
-        row1_c = ws.cell(1, 3).value
-        has_date = isinstance(row1_c, datetime) or (
-            isinstance(row1_c, str) and re.match(r'^\d{4}-\d{2}-\d{2}', row1_c.strip())
-        )
-        if has_date and _find_totals_col(ws) is not None:
-            return True
-    return False
-
-
-def _is_bold_colored_header(cell):
-    """True if a cell is a bold + distinctly colored header (marks end of a section)."""
-    if not cell.value:
-        return False
-    if not (cell.font and cell.font.bold):
-        return False
-    fill = cell.fill
-    if fill.fill_type != "solid":
-        return False
-    fg = fill.fgColor
-    if fg.type == "theme":
-        return True
-    return fg.rgb not in _EXCLUDED_COLORS
-
-
-def _read_row_total(ws, row_idx, totals_col):
-    """Dual-calculation: sum raw daily cols ourselves, also read the TOTALS col.
-    If both match within ±0.02, use the TOTALS col value.
-    If they differ, trust our own calculation."""
-    own_sum = 0.0
-    for col_idx in range(2, totals_col):
-        val = ws.cell(row_idx, col_idx).value
-        if isinstance(val, (int, float)):
-            own_sum += val
-    own_sum = round(own_sum, 2)
-
-    totals_val = ws.cell(row_idx, totals_col).value
-    sheet_total = round(float(totals_val), 2) if isinstance(totals_val, (int, float)) else 0.0
-
-    if abs(own_sum - sheet_total) <= 0.02:
-        return sheet_total
-    return own_sum
-
-
-def _extract_daily_tracking(wb, sheet_name_map, months):
-    """Extract data from the daily-tracking format.
-    - Category labels are read from the JAN sheet only (other sheets use =JAN!Axx formulas)
-    - Income is always collected individually (sub-rows between income header and next bold+colored header)
-    - Expenses: prioritize bold+colored header rows. If none found, fall back to hardcoded known names
-    - Dual-calculation: compares own daily sum vs TOTALS col, trusts own sum if mismatch
-    - Handles variable month lengths automatically
-    - Works whether file was saved from Excel or Google Sheets (no formula cache needed)
-    """
-    # Get category labels and cell formatting from JAN sheet
-    jan_ws = wb[sheet_name_map["JAN"]]
-    row_labels = {}
-    for row_idx in range(1, jan_ws.max_row + 1):
-        val = jan_ws.cell(row_idx, 1).value
-        if val and isinstance(val, str) and val.strip():
-            row_labels[row_idx] = val.strip()
-
-    if _find_totals_col(jan_ws) is None:
-        return {}, []
-
-    # ── Identify income rows ──────────────────────────────────────────────────
-    # Collect sub-rows between 'income' header and the next bold+colored header
-    income_rows = set()
-    in_income_section = False
-    for row_idx in sorted(row_labels.keys()):
-        label = row_labels[row_idx]
-        cell = jan_ws.cell(row_idx, 1)
-        if label.strip().upper() == "INCOME":
-            in_income_section = True
-            continue
-        if in_income_section:
-            if _is_bold_colored_header(cell):
-                in_income_section = False
-            else:
-                income_rows.add(row_idx)
-
-    # ── Identify expense rows ─────────────────────────────────────────────────
-    # Priority 1: bold+colored header rows (these are the main categories)
-    # Priority 2: fall back to hardcoded known category names if no bold+colored found
-    bold_colored_expense_rows = set()
-    for row_idx, label in row_labels.items():
-        if row_idx in income_rows:
-            continue
-        cell = jan_ws.cell(row_idx, 1)
-        if _is_bold_colored_header(cell):
-            label_upper = label.upper().strip()
-            # Exclude structural headers
-            if any(label_upper.startswith(p) for p in _SKIP_PREFIXES):
-                continue
-            if label_upper in ("INCOME", "TOTAL INCOME BEFORE TAXES",
-                               "EXPENSES BY D.A. CATEGORIES", "TOTAL EXPENSES"):
-                continue
-            bold_colored_expense_rows.add(row_idx)
-
-    use_bold_colored = len(bold_colored_expense_rows) > 0
-
-    results = {}
-    ordered_cats = []
-
-    for month in months:
-        ws = wb[sheet_name_map[month]]
-        totals_col = _find_totals_col(ws)
-        if totals_col is None:
-            continue
-
-        month_data = {"income": 0.0}
-        cat_order_this_month = []
-
-        for row_idx, label in row_labels.items():
-            label_upper = label.upper().strip()
-
-            # Skip structural/header rows always
-            if any(label_upper.startswith(p) for p in _SKIP_PREFIXES):
-                continue
-            if label_upper in ("INCOME", "TOTAL INCOME BEFORE TAXES",
-                               "EXPENSES BY D.A. CATEGORIES", "TOTAL EXPENSES"):
-                continue
-
-            # ── Income rows — always collected individually ────────────────
-            if row_idx in income_rows:
-                total = _read_row_total(ws, row_idx, totals_col)
-                if total == 0.0:
-                    continue
-                month_data["income"] = round(month_data["income"] + total, 2)
-                continue
-
-            # ── Expense rows — bold+colored priority or fallback ───────────
-            if use_bold_colored:
-                # Only read bold+colored header rows, skip everything else
-                if row_idx not in bold_colored_expense_rows:
-                    continue
-            else:
-                # Fallback: only read rows matching hardcoded known category names
-                if not _match_known_category(label):
-                    continue
-
-            total = _read_row_total(ws, row_idx, totals_col)
-            if total == 0.0:
-                continue
-
-            canonical = _match_known_category(label)
-            name = canonical if canonical else label
-            month_data[name] = round(month_data.get(name, 0.0) + total, 2)
-            if name not in cat_order_this_month:
-                cat_order_this_month.append(name)
-
-        # Accumulate categories across all months, preserving order, no duplicates
-        for name in cat_order_this_month:
-            if name not in ordered_cats:
-                ordered_cats.append(name)
-
-        results[month] = month_data
-
-    return results, ordered_cats
-
-
-def _find_spend_col(ws):
-    """For the YYYY Month template: find the column in row 11 matching a spend keyword.
-    Returns (col_index, data_start_row) or (None, None)."""
-    for c in range(1, ws.max_column + 1):
-        val = ws.cell(11, c).value
-        if val and str(val).strip().lower() in _SPEND_KEYWORDS:
-            return c, 12  # data starts at row 12
-    return None, None
-
-
-def _extract_yyyy_month(wb, sheet_name_map, months):
-    """Extract data from the YYYY Month style template.
-    Reads income from rows 3-10 (Earned col) and category subtotals from rows 12+."""
-    results = {}
-    ordered_cats = []
-
-    for month in months:
-        ws = wb[sheet_name_map[month]]
-        spend_col, data_start = _find_spend_col(ws)
-        if spend_col is None:
-            continue
-
-        month_data = {"income": 0.0}
-        cat_order_this_month = []
-
-        # Read income from the header section (rows 3-10) using the Earned column (col E = 5)
-        # In this template, income rows live above the SPENDING header at row 11
-        income_total = 0.0
-        for row_idx in range(3, 11):
-            name_val = ws.cell(row_idx, 1).value
-            if not name_val:
-                continue
-            name_str = str(name_val).strip().upper()
-            # Skip section headers and total rows
-            if name_str in ("INCOME", "TOTAL INCOME") or "TOTAL" in name_str:
-                continue
-            amt_val = ws.cell(row_idx, spend_col).value
-            if isinstance(amt_val, (int, float)) and amt_val > 0:
-                income_total += amt_val
-        month_data["income"] = round(income_total, 2)
-
-        for row_idx in range(data_start, ws.max_row + 1):
-            cell_a = ws.cell(row_idx, 1)
-            if not cell_a.value:
-                continue
-            name_raw = str(cell_a.value).strip()
-            if not name_raw:
-                continue
-
-            name_upper = name_raw.upper()
-
-            # Skip structural rows
-            if "TOTAL" in name_upper or any(name_upper.startswith(p) for p in _SKIP_PREFIXES):
-                continue
-
-            # Only read rows that are category group subtotals (e.g. "1. Spiritual")
-            # These are bold or match a known category
-            canonical = _match_known_category(name_raw)
-            if not canonical and not (cell_a.font and cell_a.font.bold):
-                continue
-
-            name = canonical if canonical else name_raw
-            amt_val = ws.cell(row_idx, spend_col).value
-            amt = round(float(amt_val), 2) if isinstance(amt_val, (int, float)) else 0.0
-
-            if "INCOME" in name_upper:
-                month_data["income"] = amt
-            else:
-                month_data[name] = amt
-                if name not in cat_order_this_month:
-                    cat_order_this_month.append(name)
-
-        if not ordered_cats:
-            ordered_cats = cat_order_this_month
-
-        results[month] = month_data
-
-    return results, ordered_cats
-
-
-def extract_data(filepath):
-    """Dynamically detect months and categories from the uploaded workbook."""
-    wb = load_workbook(filepath, data_only=True)
-
-    # Build a map of standard month key -> actual sheet name.
-    # Handles: plain names (JAN, January), and YYYY Month format (2025 May) for years 2020-2035.
-    sheet_name_map = {}
-    for s in wb.sheetnames:
-        # Try direct alias match first
-        standard = _MONTH_ALIASES.get(s.strip().upper())
-        # If not found, try stripping a year prefix
-        if not standard:
-            stripped = _strip_year_prefix(s)
-            standard = _MONTH_ALIASES.get(stripped)
-        if standard and standard not in sheet_name_map:
-            sheet_name_map[standard] = s
-    months = [m for m in ALL_MONTHS if m in sheet_name_map]
-
-    if not months:
-        return extract_simple(wb)
-
-    # ── Option B: Detect and handle the YYYY Month template as a special case ──
-    if _is_yyyy_month_template(wb, sheet_name_map):
-        return _extract_yyyy_month(wb, sheet_name_map, months)
-
-    # ── Option C: Detect and handle the daily-tracking template ───────────────
-    if _is_daily_tracking_template(wb, sheet_name_map):
-        return _extract_daily_tracking(wb, sheet_name_map, months)
-
-    # ── Standard extraction ────────────────────────────────────────────────────
-    results = {}
-    ordered_cats = []   # category names in sheet order, set from the first month
-
-    for month in months:
-        ws = wb[sheet_name_map[month]]
-        totals_col = _find_totals_col(ws)
-        if totals_col is None:
-            continue
-
-        # Scan column A for all category headers (known name or bold+colored)
-        headers = []
-        for row_idx in range(1, ws.max_row + 1):
-            cell = ws.cell(row=row_idx, column=1)
-            if _is_category_header(cell):
-                # Use canonical name if it matches a known category, else use raw value
-                canonical = _match_known_category(cell.value)
-                name = canonical if canonical else str(cell.value).strip()
-                headers.append((row_idx, name))
-
-        month_data = {"income": 0.0}
-        cat_order_this_month = []
-
-        for i, (row_idx, name) in enumerate(headers):
-            data_start = row_idx + 1
-            data_end = (headers[i + 1][0] - 1) if i + 1 < len(headers) else ws.max_row
-            name_upper = name.upper()
-
-            if "TOTAL" in name_upper or any(name_upper.startswith(p) for p in _SKIP_PREFIXES):
-                continue
-
-            total = _sum_col(ws, data_start, data_end, totals_col)
-
-            if "INCOME" in name_upper:
-                month_data["income"] = total
-            else:
-                month_data[name] = total
-                cat_order_this_month.append(name)
-
-        if not ordered_cats:
-            ordered_cats = cat_order_this_month
-
-        results[month] = month_data
-
-    return results, ordered_cats
-
-
-def compute_averages(monthly_data, selected_months=None):
-    """Income is summed across all active months.
-    All spending categories are averaged across active months.
-    If selected_months is None, defaults to all active months (income > 0)."""
-    if selected_months:
-        active_months = [m for m in selected_months if m in monthly_data]
-    else:
-        active_months = [m for m, data in monthly_data.items() if data.get("income", 0) > 0]
-    n = len(active_months)
-    if n == 0:
-        return {}
-
-    keys = list(next(iter(monthly_data.values())).keys())
-    result = {}
-    for k in keys:
-        total = sum(monthly_data[m].get(k, 0) for m in active_months)
-        if k == "income":
-            # Income is the grand total across all months
-            result[k] = round(total, 2)
-        else:
-            # Spending categories are averaged across months
-            result[k] = round(total / n, 2)
-    return result
-
-
-def compute_totals(monthly_data, selected_months=None):
-    """Return raw sum (not average) for each category across active months."""
-    if selected_months:
-        active_months = [m for m in selected_months if m in monthly_data]
-    else:
-        active_months = [m for m, data in monthly_data.items() if data.get("income", 0) > 0]
-    if not active_months:
-        return {}
-    keys = list(next(iter(monthly_data.values())).keys())
-    return {k: round(sum(monthly_data[m].get(k, 0) for m in active_months), 2) for k in keys}
-
-
-def build_output_xlsx(averages, assignments, totals=None):
-    """
-    Build the clean 3-bucket output spreadsheet.
-    assignments = { category_name: bucket_label, ... }
-    totals = { category_name: raw_sum_across_months, ... }
-    """
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Awareness Engine"
-
-    # ── Styles ────────────────────────────────────────────────────────────────
-    bucket_font   = Font(name="Arial", bold=True, size=12)
-    label_font    = Font(name="Arial", size=11)
-    pct_font      = Font(name="Arial", bold=True, size=12)
-    total_font    = Font(name="Arial", bold=True, size=11)
-
-    nec_fill  = PatternFill("solid", start_color="D6EAF8")   # light blue
-    lux_fill  = PatternFill("solid", start_color="D5F5E3")   # light green
-    fs_fill   = PatternFill("solid", start_color="FEF9E7")   # light yellow
-    title_fill = PatternFill("solid", start_color="2C3E50")
-    title_font = Font(name="Arial", bold=True, size=14, color="FFFFFF")
-
-    center = Alignment(horizontal="center", vertical="center")
-    left   = Alignment(horizontal="left",   vertical="center")
-    right  = Alignment(horizontal="right",  vertical="center")
-
-    thin = Side(style="thin", color="AAAAAA")
-    border = Border(top=thin, left=thin, right=thin, bottom=thin)
-
-    def style(cell, font=None, fill=None, align=None, num_fmt=None):
-        if font:   cell.font      = font
-        if fill:   cell.fill      = fill
-        if align:  cell.alignment = align
-        if num_fmt: cell.number_format = num_fmt
-        cell.border = border
-
-    totals = totals or {}
-
-    # ── Column widths ─────────────────────────────────────────────────────────
-    ws.column_dimensions["A"].width = 30
-    ws.column_dimensions["B"].width = 22  # Total Spending (all months)
-    ws.column_dimensions["C"].width = 20  # Avg Monthly Spending
-    ws.column_dimensions["D"].width = 14  # % of Income / % of Spending
-    ws.column_dimensions["E"].width = 14  # % of Income (Grand Reveal)
-
-    # ── Title row ─────────────────────────────────────────────────────────────
-    ws.merge_cells("A1:E1")
-    ws["A1"] = "THE AWARENESS ENGINE — My Financial Reality"
-    style(ws["A1"], font=title_font, fill=title_fill, align=center)
-    ws.row_dimensions[1].height = 30
-
-    # ── Income row ────────────────────────────────────────────────────────────
-    ws.row_dimensions[2].height = 6   # spacer
-    ws["A3"] = "Total Income"
-    ws["B3"] = averages.get("income", 0)
-    ws["E3"] = "100%"
-    style(ws["A3"], font=total_font, align=left)
-    style(ws["B3"], font=total_font, align=right, num_fmt='"$"#,##0.00')
-    style(ws["C3"], font=total_font, align=right)
-    style(ws["D3"], font=total_font, align=right)
-    style(ws["E3"], font=pct_font,   align=center)
-    ws.row_dimensions[3].height = 22
-
-    ws.row_dimensions[4].height = 8   # spacer
-
-    # ── Bucket colours map ────────────────────────────────────────────────────
-    bucket_fill = {
-        "Necessities":  nec_fill,
-        "Luxuries":     lux_fill,
-        "Future Self":  fs_fill,
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SimplCalc "THEE AWARENESS ENGINE"</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'DM Sans', Arial, sans-serif;
+      background: #f4f4f1;
+      color: #1a1a1a;
+      padding: 20px;
+      padding-top: 60px;
     }
 
-    # ── Group categories by bucket ────────────────────────────────────────────
-    buckets = {b: [] for b in BUCKET_LABELS}
-    for cat, bucket in assignments.items():
-        if bucket in buckets:
-            buckets[bucket].append(cat)
-
-    income = averages.get("income", 0)   # guard division with 'if income' checks below
-    total_fill = PatternFill("solid", start_color="2C3E50")
-    total_white = Font(name="Arial", bold=True, size=11, color="FFFFFF")
-    current_row = 5
-
-    for bucket_name in BUCKET_LABELS:
-        cats = buckets[bucket_name]
-        fill = bucket_fill[bucket_name]
-
-        # Bucket header
-        ws.merge_cells(f"A{current_row}:D{current_row}")
-        ws[f"A{current_row}"] = f"▶  {bucket_name.upper()}"
-        style(ws[f"A{current_row}"], font=bucket_font, fill=fill, align=left)
-        ws.row_dimensions[current_row].height = 24
-        current_row += 1
-
-        # Column sub-headers
-        ws[f"A{current_row}"] = "Category"
-        ws[f"B{current_row}"] = "Total Spending (all months)"
-        ws[f"C{current_row}"] = "Avg Monthly Spending"
-        ws[f"D{current_row}"] = "% of Income"
-        for col in ["A", "B", "C", "D"]:
-            style(ws[f"{col}{current_row}"], font=Font(name="Arial", bold=True, size=10),
-                  fill=fill, align=center)
-        ws.row_dimensions[current_row].height = 18
-        current_row += 1
-
-        # Category rows — track which rows hold the $ amounts for SUM formula
-        data_start = current_row
-        if not cats:
-            ws[f"A{current_row}"] = "(No categories assigned)"
-            ws[f"B{current_row}"] = 0
-            ws[f"C{current_row}"] = 0
-            ws[f"D{current_row}"] = "0.0%"
-            for col in ["A", "B", "C", "D"]:
-                style(ws[f"{col}{current_row}"], font=label_font, fill=fill, align=left)
-            current_row += 1
-        else:
-            for cat in cats:
-                amt = averages.get(cat, 0)
-                raw = totals.get(cat, 0)
-                pct = (amt / income) * 100 if income else 0
-                ws[f"A{current_row}"] = cat
-                ws[f"B{current_row}"] = raw
-                ws[f"C{current_row}"] = amt
-                ws[f"D{current_row}"] = f"{pct:.1f}%"
-                style(ws[f"A{current_row}"], font=label_font, fill=fill, align=left)
-                style(ws[f"B{current_row}"], font=label_font, fill=fill,
-                      align=right, num_fmt='"$"#,##0.00')
-                style(ws[f"C{current_row}"], font=label_font, fill=fill,
-                      align=right, num_fmt='"$"#,##0.00')
-                style(ws[f"D{current_row}"], font=label_font, fill=fill, align=center)
-                ws.row_dimensions[current_row].height = 20
-                current_row += 1
-
-        data_end = current_row - 1
-
-        # Bucket TOTAL row
-        bucket_total_amt = sum(averages.get(c, 0) for c in cats)
-        bucket_pct = (bucket_total_amt / income) * 100 if income else 0
-        ws[f"A{current_row}"] = f"TOTAL — {bucket_name}"
-        ws[f"B{current_row}"] = f"=SUM(B{data_start}:B{data_end})"
-        ws[f"C{current_row}"] = f"=SUM(C{data_start}:C{data_end})"
-        ws[f"D{current_row}"] = f"{bucket_pct:.1f}%"
-        for col in ["A", "B", "C", "D"]:
-            style(ws[f"{col}{current_row}"], font=total_white, fill=total_fill, align=center)
-        ws[f"B{current_row}"].number_format = '"$"#,##0.00'
-        ws[f"C{current_row}"].number_format = '"$"#,##0.00'
-        ws.row_dimensions[current_row].height = 22
-        current_row += 2   # spacer after each bucket
-
-    # ── Grand summary rows ────────────────────────────────────────────────────
-    current_row += 1
-    ws.merge_cells(f"A{current_row}:E{current_row}")
-    ws[f"A{current_row}"] = "─── GRAND REVEAL ───"
-    style(ws[f"A{current_row}"], font=Font(name="Arial", bold=True, size=12,
-          color="FFFFFF"), fill=PatternFill("solid", start_color="1A5276"), align=center)
-    ws.row_dimensions[current_row].height = 24
-    current_row += 1
-
-    # Grand Reveal column headers
-    reveal_fill = PatternFill("solid", start_color="1A5276")
-    for col, label in [("A", "Bucket"), ("B", "Total Spending (all months)"),
-                        ("C", "Avg Monthly Spending"), ("D", "% of Spending"), ("E", "% of Income")]:
-        ws[f"{col}{current_row}"] = label
-        style(ws[f"{col}{current_row}"], fill=reveal_fill, align=center)
-        ws[f"{col}{current_row}"].font = Font(name="Arial", bold=True, size=10, color="FFFFFF")
-    ws.row_dimensions[current_row].height = 18
-    current_row += 1
-
-    left_out = {cat for cat, b in assignments.items() if b == "Leave Out"}
-    all_spent = sum(v for k, v in averages.items() if k != "income" and k not in left_out)
-    all_raw_spent = sum(totals.get(k, 0) for k in averages if k != "income" and k not in left_out)
-
-    for bucket_name in BUCKET_LABELS:
-        cats = buckets[bucket_name]
-        bucket_total = sum(averages.get(c, 0) for c in cats)
-        bucket_raw_total = sum(totals.get(c, 0) for c in cats)
-        pct_spending = (bucket_total / all_spent) * 100 if all_spent else 0
-        pct_income   = (bucket_raw_total / income) * 100 if income    else 0
-        ws[f"A{current_row}"] = bucket_name.upper()
-        ws[f"B{current_row}"] = bucket_raw_total
-        ws[f"C{current_row}"] = bucket_total
-        ws[f"D{current_row}"] = f"{pct_spending:.1f}%"
-        ws[f"E{current_row}"] = f"{pct_income:.1f}%"
-        for col in ["A", "B", "C", "D", "E"]:
-            style(ws[f"{col}{current_row}"],
-                  font=Font(name="Arial", bold=True, size=11), align=center)
-        ws[f"B{current_row}"].number_format = '"$"#,##0.00'
-        ws[f"C{current_row}"].number_format = '"$"#,##0.00'
-        ws.row_dimensions[current_row].height = 22
-        current_row += 1
-
-    # Total spending summary row
-    dark_fill = PatternFill("solid", start_color="2C3E50")
-    white_bold = Font(name="Arial", bold=True, size=11, color="FFFFFF")
-    ws[f"A{current_row}"] = "TOTAL SPENDING"
-    ws[f"B{current_row}"] = all_raw_spent
-    ws[f"C{current_row}"] = all_spent
-    ws[f"D{current_row}"] = "100.0%"
-    ws[f"E{current_row}"] = f"{(all_spent / income * 100):.1f}%" if income else "0.0%"
-    for col in ["A", "B", "C", "D", "E"]:
-        style(ws[f"{col}{current_row}"], font=white_bold, fill=dark_fill, align=center)
-    ws[f"B{current_row}"].number_format = '"$"#,##0.00'
-    ws[f"C{current_row}"].number_format = '"$"#,##0.00'
-    ws.row_dimensions[current_row].height = 22
-
-    # Remaining Income row
-    current_row += 1
-    remaining_income = round(income - all_raw_spent, 2)
-    if remaining_income >= 0:
-        rem_fill = PatternFill("solid", start_color="D5F5E3")
-        rem_font = Font(name="Arial", bold=True, size=11, color="145A32")
-    else:
-        rem_fill = PatternFill("solid", start_color="FDECEA")
-        rem_font = Font(name="Arial", bold=True, size=11, color="C0392B")
-    ws[f"A{current_row}"] = "Remaining Income"
-    ws[f"B{current_row}"] = remaining_income
-    ws[f"C{current_row}"] = ""
-    ws[f"D{current_row}"] = "—"
-    ws[f"E{current_row}"] = "—"
-    for col in ["A", "B", "C", "D", "E"]:
-        ws[f"{col}{current_row}"].fill = rem_fill
-        ws[f"{col}{current_row}"].font = rem_font
-        ws[f"{col}{current_row}"].alignment = center
-        ws[f"{col}{current_row}"].border = border
-    ws[f"B{current_row}"].number_format = '"$"#,##0.00'
-    ws.row_dimensions[current_row].height = 22
-
-    # ── Save to temp file ─────────────────────────────────────────────────────
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-    wb.save(tmp.name)
-    return tmp.name
-
-
-def build_table_data(averages, assignments, totals=None):
-    """Build structured table data for frontend rendering."""
-    income = averages.get("income", 0)
-    left_out = {cat for cat, b in assignments.items() if b == "Leave Out"}
-    totals = totals or {}
-
-    buckets_out = []
-    for bucket_name in BUCKET_LABELS:
-        cats = [cat for cat, b in assignments.items() if b == bucket_name]
-        categories = [{"name": cat,
-                       "amt": round(averages.get(cat, 0), 2),
-                       "raw_total": round(totals.get(cat, 0), 2)} for cat in cats]
-        bucket_total = round(sum(c["amt"] for c in categories), 2)
-        bucket_raw_total = round(sum(c["raw_total"] for c in categories), 2)
-        pct_income = round((bucket_raw_total / income * 100), 1) if income else 0.0
-        buckets_out.append({
-            "name": bucket_name,
-            "categories": categories,
-            "total": bucket_total,
-            "raw_total": bucket_raw_total,
-            "pct_income": pct_income
-        })
-
-    all_spent = round(sum(v for k, v in averages.items()
-                          if k != "income" and k not in left_out), 2)
-    all_raw_spent = round(sum(totals.get(k, 0) for k in averages
-                               if k != "income" and k not in left_out), 2)
-
-    grand_reveal = []
-    for b in buckets_out:
-        grand_reveal.append({
-            "name": b["name"],
-            "total": b["total"],
-            "raw_total": b["raw_total"],
-            "pct_spending": round((b["total"] / all_spent * 100), 1) if all_spent else 0.0,
-            "pct_income": b["pct_income"]
-        })
-
-    remaining_income = round(income - all_raw_spent, 2)
-
-    return {
-        "income": round(income, 2),
-        "buckets": buckets_out,
-        "grand_reveal": grand_reveal,
-        "total_spending": all_spent,
-        "total_raw_spending": all_raw_spent,
-        "remaining_income": remaining_income,
-        "total_pct_income": round((all_raw_spent / income * 100), 1) if income else 0.0
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
     }
 
+    /* ── Header ─────────────────────────────────────────── */
+    .header {
+      background: linear-gradient(135deg, #0f1f3d, #1a3a5c);
+      color: white;
+      padding: 24px;
+      border-radius: 14px;
+      margin-bottom: 20px;
+      text-align: center;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+    .header h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; letter-spacing: 0.3px; }
+    .header p  { font-size: 14px; opacity: 0.85; }
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+    /* ── Cards ──────────────────────────────────────────── */
+    .card {
+      background: white;
+      border-radius: 14px;
+      padding: 24px;
+      margin-bottom: 20px;
+      border: 1px solid #e8e8e4;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    }
+    .card h2 {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 14px;
+      border-bottom: 2px solid #0f1f3d;
+      padding-bottom: 8px;
+    }
 
-@app.route("/")
-def index():
-    return render_template("index.html")
+    /* ── Step badges ────────────────────────────────────── */
+    .step-badge {
+      display: inline-block;
+      background: #0f1f3d;
+      color: white;
+      border-radius: 50%;
+      width: 26px; height: 26px;
+      text-align: center;
+      line-height: 26px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-right: 8px;
+    }
 
+    /* ── Upload area ────────────────────────────────────── */
+    .upload-box {
+      border: 2px dashed #aab;
+      border-radius: 12px;
+      padding: 30px;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .upload-box:hover { background: #f7f8ff; }
+    .upload-box input  { display: none; }
+    .upload-box label  { cursor: pointer; font-size: 15px; }
+    .upload-box .hint  { font-size: 12px; color: #888; margin-top: 8px; }
+    #file-name { margin-top: 10px; font-size: 13px; color: #0f1f3d; font-weight: 600; }
 
-@app.route("/upload", methods=["POST"])
-def upload():
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+    /* ── Buttons ────────────────────────────────────────── */
+    button {
+      background: #0f1f3d;
+      color: white;
+      border: none;
+      padding: 12px 28px;
+      font-size: 14px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      font-weight: 600;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+      letter-spacing: 0.2px;
+    }
+    button:hover   { background: #00bcd4; }
+    button:active  { transform: scale(0.98); }
+    button:disabled { background: #aaa; cursor: not-allowed; }
 
-    f = request.files["file"]
-    if not f.filename.lower().endswith(".xlsx"):
-        return jsonify({"error": "Please upload a .xlsx file"}), 400
+    /* ── Income display ─────────────────────────────────── */
+    .income-box {
+      background: #eaf4fb;
+      border: 1px solid #aed6f1;
+      border-radius: 10px;
+      padding: 14px 20px;
+      font-size: 15px;
+      margin-bottom: 16px;
+    }
+    .income-box span { font-weight: bold; font-size: 17px; color: #1a5276; }
 
-    # Save upload to temp
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    /* ── Category assignment rows ───────────────────────── */
+    .cat-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid #eee;
+      gap: 12px;
+    }
+    .cat-row:last-child { border-bottom: none; }
 
-    try:
-        f.save(tmp.name)
-        monthly_data, category_names = extract_data(tmp.name)
-        # Deduplicate category names (preserving order) in case the spreadsheet
-        # lists the same category more than once under the same month.
-        seen = set()
-        category_names = [n for n in category_names if not (n in seen or seen.add(n))]
-        session["monthly_data"] = monthly_data
-        averages = compute_averages(monthly_data)
+    .cat-info { flex: 1; }
+    .cat-name  { font-size: 14px; font-weight: bold; }
+    .cat-avg   { font-size: 12px; color: #666; margin-top: 2px; }
 
-        categories = [{"name": n, "amount": averages.get(n, 0)} for n in category_names]
+    .bucket-choices { display: flex; gap: 8px; flex-wrap: wrap; }
 
-        return jsonify({
-            "income": averages.get("income", 0),
-            "categories": categories,
-            "months_found": list(monthly_data.keys())
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        os.unlink(tmp.name)
+    .choice-btn {
+      padding: 7px 14px;
+      font-size: 12px;
+      border-radius: 20px;
+      border: 2px solid #ccc;
+      background: white;
+      color: #444;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-weight: bold;
+    }
+    .choice-btn:hover { border-color: #0f1f3d; color: #0f1f3d; }
 
+    .choice-btn.selected-Necessities  { background: #dbeef7; border-color: #4fa8bc; color: #1a6878; }
+    .choice-btn.selected-Luxuries     { background: #daf2e5; border-color: #5fa87c; color: #1a6040; }
+    .choice-btn.selected-FutureSelf   { background: #fef0e0; border-color: #d47a56; color: #7a4020; }
+    .choice-btn.selected-LeaveOut     { background: #f2f3f4; border-color: #95a5a6; color: #555; }
 
-@app.route("/generate", methods=["POST"])
-def generate():
-    data = request.get_json()
-    assignments = data.get("assignments", {})  # { cat_name: bucket_label }
-    selected_months = data.get("selected_months", None)
+    /* ── Progress bar ───────────────────────────────────── */
+    .progress-bar {
+      background: #eee;
+      border-radius: 8px;
+      height: 12px;
+      margin: 10px 0;
+      overflow: hidden;
+    }
+    .progress-fill {
+      background: #00bcd4;
+      height: 100%;
+      transition: width 0.3s;
+      border-radius: 8px;
+    }
+    .progress-text { font-size: 12px; color: #666; text-align: right; }
 
-    monthly_data = session.get("monthly_data")
-    if not monthly_data:
-        return jsonify({"error": "No data in session. Please upload your file again."}), 400
+    /* ── Messages ───────────────────────────────────────── */
+    .msg {
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 14px;
+      margin-top: 12px;
+    }
+    .msg-error   { background: #fde8e8; color: #c0392b; border: 1px solid #e74c3c; }
+    .msg-success { background: #d5f5e3; color: #145a32; border: 1px solid #27ae60; }
 
-    averages = compute_averages(monthly_data, selected_months)
-    if not averages:
-        return jsonify({"error": "No data found for the selected months."}), 400
+    /* ── Hidden sections ────────────────────────────────── */
+    .hidden { display: none !important; }
 
-    totals = compute_totals(monthly_data, selected_months)
+    /* ── Fixed top bar ───────────────────────────────────── */
+    .top-bar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      background: #0f1f3d;
+      padding: 10px 20px;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      z-index: 1000;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    }
+    .top-bar button {
+      background: #1a3a5c;
+      padding: 8px 18px;
+      font-size: 13px;
+    }
+    .top-bar button:hover { background: #00bcd4; }
 
-    try:
-        output_path = build_output_xlsx(averages, assignments, totals)
-        session["output_path"] = output_path
-        session["assignments"] = assignments
+    /* ── Spreadsheet preview ─────────────────────────────── */
+    #table-container { overflow-x: auto; margin-top: 12px; }
+    .preview-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: 'DM Sans', Arial, sans-serif;
+      font-size: 13px;
+    }
+    .preview-table td {
+      padding: 8px 10px;
+      border: 1px solid #ccc;
+      vertical-align: middle;
+    }
+    .preview-table .spacer-row td { border: none; height: 5px; background: transparent; }
+    .preview-table .editable { cursor: text; }
+    .preview-table .editable:hover { outline: 1px dashed #aaa; }
+    .preview-table .editable:focus { outline: 2px solid #00bcd4; background: #fff !important; }
+    .preview-table .edited { background: #fffde7 !important; }
 
-        # Build month-by-month breakdown for trend view
-        active_months = selected_months if selected_months else \
-            [m for m, d in monthly_data.items() if d.get("income", 0) > 0]
-        session["active_months"] = active_months
-        monthly_breakdown = {
-            cat: {m: round(monthly_data[m].get(cat, 0), 2) for m in active_months}
-            for cat, bucket in assignments.items()
-            if bucket not in ("Leave Out",) and bucket in BUCKET_LABELS
+    /* ── What If sliders ─────────────────────────────────── */
+    .whatif-slider { width: 100%; margin-top: 4px; display: none; accent-color: #4fa8bc; }
+    .whatif-active .whatif-slider { display: block; }
+    .btn-whatif:hover { background: #00bcd4; }
+    .btn-whatif.active { background: #00bcd4; }
+    .btn-trends:hover { background: #00bcd4; }
+    .btn-trends.active { background: #00bcd4; }
+
+    /* ── What If reset buttons ──────────────────────────────── */
+    .whatif-reset-btn {
+      background: none;
+      border: 1px solid #e74c3c;
+      color: #e74c3c;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-weight: bold;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-left: 4px;
+      vertical-align: middle;
+      transition: background 0.15s, color 0.15s;
+      line-height: 1.4;
+    }
+    .whatif-reset-btn:hover { background: #e74c3c; color: white; }
+    #whatif-reset-all-btn { background: #c0392b; }
+    #whatif-reset-all-btn:hover { background: #922b21; }
+
+    /* ── Slider bubble ──────────────────────────────────── */
+    .slider-wrap { position: relative; display: block; width: 100%; }
+    .slider-bubble {
+      position: absolute;
+      background: #0f1f3d;
+      color: white;
+      border-radius: 8px;
+      padding: 2px 7px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      transform: translateX(-50%);
+      top: -28px;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .slider-bubble::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 4px solid transparent;
+      border-top-color: #0f1f3d;
+    }
+
+    /* ── Save overlay ────────────────────────────────────── */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+    }
+    .overlay-box {
+      background: white;
+      border-radius: 16px;
+      padding: 36px 32px;
+      text-align: center;
+      max-width: 420px;
+      width: 90%;
+      box-shadow: 0 6px 30px rgba(0,0,0,0.3);
+    }
+    .overlay-box h3 { font-size: 18px; margin-bottom: 10px; color: #2c3e50; }
+    .overlay-box p  { font-size: 14px; color: #555; margin-bottom: 20px; }
+    .overlay-actions { display: flex; gap: 12px; justify-content: center; }
+    .btn-red { background: #c0392b; }
+    .btn-red:hover { background: #922b21; }
+
+    /* ── Loading spinner ─────────────────────────────────── */
+    .spinner {
+      display: inline-block;
+      width: 18px; height: 18px;
+      border: 3px solid #fff;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Budget Template Builder ─────────────────────────── */
+    .tmpl-income-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .tmpl-income-row label {
+      font-weight: 600;
+      font-size: 15px;
+      min-width: 160px;
+    }
+    .tmpl-income-row input {
+      border: 1.5px solid #d0d0cc;
+      border-radius: 8px;
+      padding: 7px 12px;
+      font-size: 15px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      width: 160px;
+    }
+    .tmpl-bucket {
+      border-radius: 12px;
+      border: 1.5px solid #e8e8e4;
+      margin-bottom: 18px;
+      overflow: hidden;
+    }
+    .tmpl-bucket-header {
+      padding: 10px 16px;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: .05em;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      background: #0f1f3d;
+      color: white;
+    }
+    .tmpl-bucket-header span:first-child {
+      grid-column: 2;
+      text-align: center;
+    }
+    .tmpl-bucket-pct {
+      grid-column: 3;
+      text-align: right;
+    }
+    .tmpl-bucket[data-bucket="Necessities"] .tmpl-row { background: #f0f8fc; }
+    .tmpl-bucket[data-bucket="Luxuries"]    .tmpl-row { background: #f0faf4; }
+    .tmpl-bucket[data-bucket="Future Self"] .tmpl-row { background: #fdf6ee; }
+    .tmpl-bucket table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .tmpl-bucket th {
+      background: #f4f4f1;
+      font-weight: 600;
+      font-size: 12px;
+      padding: 7px 12px;
+      text-align: center;
+      border-bottom: 1.5px solid #e8e8e4;
+    }
+    .tmpl-bucket th:first-child { text-align: left; }
+    .tmpl-row td {
+      padding: 6px 10px;
+      border-bottom: 1px solid rgba(0,0,0,0.05);
+      vertical-align: middle;
+    }
+    .tmpl-row input[type="text"] {
+      width: 100%;
+      border: 1.5px solid #d0d0cc;
+      border-radius: 7px;
+      padding: 5px 10px;
+      font-size: 13px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      background: white;
+    }
+    .tmpl-row input[type="number"] {
+      width: 100%;
+      border: 1.5px solid #d0d0cc;
+      border-radius: 7px;
+      padding: 5px 10px;
+      font-size: 13px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      background: white;
+      text-align: right;
+    }
+    .tmpl-remove-btn {
+      background: none;
+      border: none;
+      color: #c0392b;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 6px;
+      line-height: 1;
+    }
+    .tmpl-remove-btn:hover { background: #fdecea; }
+    .tmpl-subtotal {
+      text-align: right;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 8px 12px;
+      background: #f4f4f1;
+      border-top: 1.5px solid #e8e8e4;
+      color: #333;
+    }
+    .tmpl-add-btn {
+      background: none;
+      border: 1.5px dashed #aaa;
+      border-radius: 8px;
+      color: #777;
+      font-size: 13px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      cursor: pointer;
+      padding: 5px 14px;
+      margin: 0 12px 10px;
+      width: calc(100% - 24px);
+    }
+    .tmpl-add-btn:hover { border-color: #0f1f3d; color: #0f1f3d; background: #f4f4f1; }
+    .tmpl-dl-btn {
+      background: #0f1f3d;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 11px 28px;
+      font-size: 15px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    .tmpl-dl-btn:hover { background: #00bcd4; }
+    .tmpl-reveal {
+      margin: 20px 0 16px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1.5px solid #e8e8e4;
+    }
+    .tmpl-reveal-header {
+      background: #0f1f3d;
+      color: white;
+      text-align: center;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: .05em;
+      padding: 10px 16px;
+    }
+    .tmpl-reveal table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .tmpl-reveal th {
+      background: #f4f4f1;
+      font-weight: 600;
+      padding: 7px 12px;
+      text-align: center;
+      border-bottom: 1.5px solid #e8e8e4;
+    }
+    .tmpl-reveal th:first-child { text-align: left; }
+    .tmpl-reveal td {
+      padding: 7px 12px;
+      text-align: center;
+      border-bottom: 1px solid #f0f0ec;
+    }
+    .tmpl-reveal td:first-child { text-align: left; font-weight: 500; }
+    .tmpl-reveal tr:last-child td { border-bottom: none; font-weight: 700; background: #f4f4f1; }
+    .tmpl-reveal .reveal-nec { background: #f0f8fc; }
+    .tmpl-reveal .reveal-lux { background: #f0faf4; }
+    .tmpl-reveal .reveal-fs  { background: #fdf6ee; }
+
+    /* ── Home screen choice cards ───────────────────────────── */
+    .home-choice-card {
+      background: #f4f4f1;
+      border: 2px solid #e8e8e4;
+      border-radius: 14px;
+      padding: 28px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      flex: 1;
+      min-width: 200px;
+      max-width: 280px;
+    }
+    .home-choice-card:hover {
+      border-color: #0f1f3d;
+      background: white;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+    }
+    .home-choice-icon  { font-size: 36px; margin-bottom: 12px; }
+    .home-choice-title { font-size: 15px; font-weight: 700; color: #0f1f3d; margin-bottom: 8px; }
+    .home-choice-desc  { font-size: 13px; color: #666; line-height: 1.5; }
+
+    /* ── 3-Month builder extras ──────────────────────────────── */
+    .tm-setup-grid {
+      display: grid;
+      grid-template-columns: 180px 1fr 1fr 1fr;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 8px;
+      padding: 0 2px;
+    }
+    .tm-setup-label { font-weight: 600; font-size: 14px; }
+    .tm-month-name-input {
+      border: 1.5px solid #d0d0cc;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 13px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      width: 100%;
+      text-align: center;
+      font-weight: 600;
+      background: #f4f4f1;
+    }
+    .tm-income-input {
+      border: 1.5px solid #d0d0cc;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 13px;
+      font-family: 'DM Sans', Arial, sans-serif;
+      width: 100%;
+      text-align: right;
+    }
+  </style>
+</head>
+<body>
+
+<div class="top-bar">
+  <button onclick="resetApp()">↩ Start Over</button>
+</div>
+
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>⚡ The Awareness Engine</h1>
+    <p>Upload your spreadsheet. Label your categories. Get the truth.</p>
+  </div>
+
+  <!-- HOME SCREEN -->
+  <div class="card" id="home-screen">
+    <h2 style="text-align:center;border-bottom:none;font-size:18px;margin-bottom:6px;">How would you like to get started?</h2>
+    <p style="text-align:center;color:#666;font-size:14px;margin-bottom:28px;">Choose your path — use Start Over anytime to switch.</p>
+    <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
+      <div class="home-choice-card" onclick="chooseUpload()">
+        <div class="home-choice-icon">📂</div>
+        <div class="home-choice-title">Upload My Spreadsheet</div>
+        <div class="home-choice-desc">I already have budget data in a .xlsx file</div>
+      </div>
+      <div class="home-choice-card" onclick="chooseBuild()">
+        <div class="home-choice-icon">📋</div>
+        <div class="home-choice-title">Build My Budget</div>
+        <div class="home-choice-desc">I want to build a budget from scratch</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BUILDER CHOICE SCREEN -->
+  <div class="card hidden" id="builder-choice-screen">
+    <h2 style="text-align:center;border-bottom:none;font-size:18px;margin-bottom:6px;">Which builder?</h2>
+    <p style="text-align:center;color:#666;font-size:14px;margin-bottom:28px;">Choose how much data you want to work with.</p>
+    <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
+      <div class="home-choice-card" onclick="chooseSingleMonth()">
+        <div class="home-choice-icon">📋</div>
+        <div class="home-choice-title">Single Month Budget Builder</div>
+        <div class="home-choice-desc">Build a budget based on one month of expenses</div>
+      </div>
+      <div class="home-choice-card" onclick="chooseThreeMonth()">
+        <div class="home-choice-icon">📅</div>
+        <div class="home-choice-title">Last 3 Months Budget Builder</div>
+        <div class="home-choice-desc">Use 3 months of real data for a better average</div>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:20px;">
+      <button onclick="goHome()" style="background:none;border:none;color:#888;font-size:13px;cursor:pointer;font-family:'DM Sans',Arial,sans-serif;">← Back</button>
+    </div>
+  </div>
+
+  <!-- STEP 1: Upload -->
+  <div class="card hidden" id="step1-card">
+    <h2><span class="step-badge">1</span>Upload Your Spreadsheet</h2>
+    <div class="upload-box" onclick="document.getElementById('file-input').click()">
+      <label>📂 Click here to choose your .xlsx file</label>
+      <div class="hint">ONLY COMPATIBLE WITH .XLSX FILES</div>
+      <input type="file" id="file-input" accept=".xlsx" onchange="handleFileSelect(this)" />
+      <div id="file-name"></div>
+    </div>
+    <br/>
+    <button id="upload-btn" onclick="uploadFile()" disabled>
+      Scan My Spreadsheet
+    </button>
+    <div id="upload-msg"></div>
+  </div>
+
+  <!-- Single Month Budget Builder -->
+  <div class="card hidden" id="template-card">
+    <h2>📋 Budget Template Builder</h2>
+    <p style="color:#666;font-size:14px;margin-bottom:20px;">Don't have a spreadsheet yet? Build one here — edit the categories, add your amounts, then download it as a ready-to-use .xlsx file.</p>
+
+    <div class="tmpl-income-row">
+      <label>Monthly Income ($)</label>
+      <input type="number" id="tmpl-income" placeholder="e.g. 4000" min="0" step="1" oninput="tmplRecalculate()">
+    </div>
+
+    <!-- Necessities -->
+    <div class="tmpl-bucket" data-bucket="Necessities">
+      <div class="tmpl-bucket-header">
+        <span>🏠 Necessities</span>
+        <span class="tmpl-bucket-pct" id="tmpl-pct-necessities">0%</span>
+      </div>
+      <table><thead><tr><th>Category</th><th style="text-align:right;">Amount ($)</th><th style="width:36px;"></th></tr></thead><tbody id="tmpl-rows-necessities"></tbody></table>
+      <div class="tmpl-subtotal">Subtotal: <span id="tmpl-sub-necessities">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmplAddRow('Necessities')">+ Add Category</button>
+    </div>
+
+    <!-- Luxuries -->
+    <div class="tmpl-bucket" data-bucket="Luxuries">
+      <div class="tmpl-bucket-header">
+        <span>✨ Luxuries</span>
+        <span class="tmpl-bucket-pct" id="tmpl-pct-luxuries">0%</span>
+      </div>
+      <table><thead><tr><th>Category</th><th style="text-align:right;">Amount ($)</th><th style="width:36px;"></th></tr></thead><tbody id="tmpl-rows-luxuries"></tbody></table>
+      <div class="tmpl-subtotal">Subtotal: <span id="tmpl-sub-luxuries">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmplAddRow('Luxuries')">+ Add Category</button>
+    </div>
+
+    <!-- Future Self -->
+    <div class="tmpl-bucket" data-bucket="Future Self">
+      <div class="tmpl-bucket-header">
+        <span>🚀 Future Self</span>
+        <span class="tmpl-bucket-pct" id="tmpl-pct-future-self">0%</span>
+      </div>
+      <table><thead><tr><th>Category</th><th style="text-align:right;">Amount ($)</th><th style="width:36px;"></th></tr></thead><tbody id="tmpl-rows-future-self"></tbody></table>
+      <div class="tmpl-subtotal">Subtotal: <span id="tmpl-sub-future-self">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmplAddRow('Future Self')">+ Add Category</button>
+    </div>
+
+    <!-- Grand Reveal -->
+    <div class="tmpl-reveal">
+      <div class="tmpl-reveal-header">⚡ Grand Reveal</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Bucket</th>
+            <th>Amount</th>
+            <th>% of Income</th>
+            <th>% of Spending</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="reveal-nec">
+            <td>🏠 Necessities</td>
+            <td id="gr-amt-necessities">$0.00</td>
+            <td id="gr-inc-necessities">0%</td>
+            <td id="gr-spd-necessities">0%</td>
+          </tr>
+          <tr class="reveal-lux">
+            <td>✨ Luxuries</td>
+            <td id="gr-amt-luxuries">$0.00</td>
+            <td id="gr-inc-luxuries">0%</td>
+            <td id="gr-spd-luxuries">0%</td>
+          </tr>
+          <tr class="reveal-fs">
+            <td>🚀 Future Self</td>
+            <td id="gr-amt-future-self">$0.00</td>
+            <td id="gr-inc-future-self">0%</td>
+            <td id="gr-spd-future-self">0%</td>
+          </tr>
+          <tr>
+            <td>Total Expenses</td>
+            <td id="gr-total-expenses">$0.00</td>
+            <td id="gr-total-pct-inc">0%</td>
+            <td>100%</td>
+          </tr>
+          <tr id="gr-remaining-row">
+            <td>💰 Remaining Income</td>
+            <td id="gr-remaining">$0.00</td>
+            <td id="gr-remaining-pct">0%</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="display:flex;justify-content:space-between;padding:10px 16px;font-size:13px;font-weight:600;background:#f4f4f1;border-top:1.5px solid #e8e8e4;">
+        <span>Total Income</span>
+        <span id="gr-total-income">$0.00</span>
+      </div>
+    </div>
+
+    <button class="tmpl-dl-btn" onclick="tmplDownload()">⬇ Download Template (.xlsx)</button>
+    <div id="tmpl-msg" style="margin-top:10px;font-size:13px;color:#c0392b;"></div>
+  </div>
+
+  <!-- Last 3 Months Budget Builder -->
+  <div class="card hidden" id="three-month-card">
+    <h2>📅 Last 3 Months Budget Builder</h2>
+    <p style="color:#666;font-size:14px;margin-bottom:20px;">Enter your actual expenses for the last 3 months. The engine averages them into a ready-to-upload budget template.</p>
+
+    <!-- Month names -->
+    <div class="tm-setup-grid" style="margin-bottom:4px;">
+      <div class="tm-setup-label"></div>
+      <input type="text" class="tm-month-name-input" id="tm-month1-name" value="Month 1" oninput="tmThreeUpdateHeaders()">
+      <input type="text" class="tm-month-name-input" id="tm-month2-name" value="Month 2" oninput="tmThreeUpdateHeaders()">
+      <input type="text" class="tm-month-name-input" id="tm-month3-name" value="Month 3" oninput="tmThreeUpdateHeaders()">
+    </div>
+    <!-- Income per month -->
+    <div class="tm-setup-grid" style="margin-bottom:24px;">
+      <div class="tm-setup-label">Monthly Income ($)</div>
+      <input type="number" class="tm-income-input" id="tm-income-1" placeholder="e.g. 4000" min="0" step="1" oninput="tmThreeRecalculate()">
+      <input type="number" class="tm-income-input" id="tm-income-2" placeholder="e.g. 4000" min="0" step="1" oninput="tmThreeRecalculate()">
+      <input type="number" class="tm-income-input" id="tm-income-3" placeholder="e.g. 4000" min="0" step="1" oninput="tmThreeRecalculate()">
+    </div>
+
+    <!-- Necessities -->
+    <div class="tmpl-bucket" data-bucket="Necessities">
+      <div class="tmpl-bucket-header">
+        <span>🏠 Necessities</span>
+        <span class="tmpl-bucket-pct" id="tm-pct-necessities">0%</span>
+      </div>
+      <table><thead><tr>
+        <th style="text-align:left;">Category</th>
+        <th class="tm-col-m1" style="text-align:right;">Month 1</th>
+        <th class="tm-col-m2" style="text-align:right;">Month 2</th>
+        <th class="tm-col-m3" style="text-align:right;">Month 3</th>
+        <th style="text-align:right;">Avg</th>
+        <th style="width:36px;"></th>
+      </tr></thead><tbody id="tm-rows-necessities"></tbody></table>
+      <div class="tmpl-subtotal">Avg Subtotal: <span id="tm-sub-necessities">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmThreeAddRow('Necessities')">+ Add Category</button>
+    </div>
+
+    <!-- Luxuries -->
+    <div class="tmpl-bucket" data-bucket="Luxuries">
+      <div class="tmpl-bucket-header">
+        <span>✨ Luxuries</span>
+        <span class="tmpl-bucket-pct" id="tm-pct-luxuries">0%</span>
+      </div>
+      <table><thead><tr>
+        <th style="text-align:left;">Category</th>
+        <th class="tm-col-m1" style="text-align:right;">Month 1</th>
+        <th class="tm-col-m2" style="text-align:right;">Month 2</th>
+        <th class="tm-col-m3" style="text-align:right;">Month 3</th>
+        <th style="text-align:right;">Avg</th>
+        <th style="width:36px;"></th>
+      </tr></thead><tbody id="tm-rows-luxuries"></tbody></table>
+      <div class="tmpl-subtotal">Avg Subtotal: <span id="tm-sub-luxuries">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmThreeAddRow('Luxuries')">+ Add Category</button>
+    </div>
+
+    <!-- Future Self -->
+    <div class="tmpl-bucket" data-bucket="Future Self">
+      <div class="tmpl-bucket-header">
+        <span>🚀 Future Self</span>
+        <span class="tmpl-bucket-pct" id="tm-pct-future-self">0%</span>
+      </div>
+      <table><thead><tr>
+        <th style="text-align:left;">Category</th>
+        <th class="tm-col-m1" style="text-align:right;">Month 1</th>
+        <th class="tm-col-m2" style="text-align:right;">Month 2</th>
+        <th class="tm-col-m3" style="text-align:right;">Month 3</th>
+        <th style="text-align:right;">Avg</th>
+        <th style="width:36px;"></th>
+      </tr></thead><tbody id="tm-rows-future-self"></tbody></table>
+      <div class="tmpl-subtotal">Avg Subtotal: <span id="tm-sub-future-self">$0.00</span></div>
+      <button class="tmpl-add-btn" onclick="tmThreeAddRow('Future Self')">+ Add Category</button>
+    </div>
+
+    <!-- Grand Reveal -->
+    <div class="tmpl-reveal">
+      <div class="tmpl-reveal-header">⚡ Grand Reveal (3-Month Average)</div>
+      <table>
+        <thead><tr><th>Bucket</th><th>Avg Amount</th><th>% of Avg Income</th><th>% of Spending</th></tr></thead>
+        <tbody>
+          <tr class="reveal-nec">
+            <td>🏠 Necessities</td>
+            <td id="tm-gr-amt-necessities">$0.00</td>
+            <td id="tm-gr-inc-necessities">0%</td>
+            <td id="tm-gr-spd-necessities">0%</td>
+          </tr>
+          <tr class="reveal-lux">
+            <td>✨ Luxuries</td>
+            <td id="tm-gr-amt-luxuries">$0.00</td>
+            <td id="tm-gr-inc-luxuries">0%</td>
+            <td id="tm-gr-spd-luxuries">0%</td>
+          </tr>
+          <tr class="reveal-fs">
+            <td>🚀 Future Self</td>
+            <td id="tm-gr-amt-future-self">$0.00</td>
+            <td id="tm-gr-inc-future-self">0%</td>
+            <td id="tm-gr-spd-future-self">0%</td>
+          </tr>
+          <tr>
+            <td>Total Expenses</td>
+            <td id="tm-gr-total-expenses">$0.00</td>
+            <td id="tm-gr-total-pct-inc">0%</td>
+            <td>100%</td>
+          </tr>
+          <tr id="tm-gr-remaining-row">
+            <td>💰 Remaining Income</td>
+            <td id="tm-gr-remaining">$0.00</td>
+            <td id="tm-gr-remaining-pct">0%</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="display:flex;justify-content:space-between;padding:10px 16px;font-size:13px;font-weight:600;background:#f4f4f1;border-top:1.5px solid #e8e8e4;">
+        <span>Avg Monthly Income</span>
+        <span id="tm-gr-total-income">$0.00</span>
+      </div>
+    </div>
+
+    <button class="tmpl-dl-btn" onclick="tmThreeDownload()">⬇ Download 3-Month Average Template (.xlsx)</button>
+    <div id="tm-msg" style="margin-top:10px;font-size:13px;color:#c0392b;"></div>
+  </div>
+
+  <!-- STEP 2: Assign Categories -->
+  <div class="card hidden" id="step2-card">
+    <h2><span class="step-badge">2</span>Where Does Each Category Belong?</h2>
+
+    <div class="income-box">
+      Your Average Monthly Expenses: <span id="expenses-display">$0</span><br/>
+      Your Total Income: <span id="income-display">$0</span>
+    </div>
+
+    <div id="month-selector" style="margin-bottom:16px;">
+      <p style="font-size:13px;font-weight:bold;margin-bottom:8px;">Which months to include?</p>
+      <div id="month-checkboxes" style="display:flex;gap:10px;flex-wrap:wrap;font-size:13px;"></div>
+    </div>
+
+    <p style="font-size:13px; color:#555; margin-bottom:16px;">
+      For each category below, choose the bucket it belongs in.
+      <strong>You decide — no guessing.</strong>
+    </p>
+
+    <div class="progress-bar">
+      <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+    <div class="progress-text" id="progress-text">0 of 0 labeled</div>
+
+    <div id="category-list"></div>
+
+    <br/>
+    <button id="generate-btn" onclick="generateReport()" disabled>
+      ⚡ Generate My Awareness Report
+    </button>
+    <div id="generate-msg"></div>
+  </div>
+
+  <!-- STEP 3: View, Edit & Download -->
+  <div class="card hidden" id="step3-card">
+    <h2><span class="step-badge">3</span>Your Awareness Report</h2>
+    <p style="font-size:13px; color:#555; margin-bottom:12px;">
+      Click any <strong>category name</strong> or <strong>dollar amount</strong> to edit inline.
+      Totals and percentages recalculate when you save.
+    </p>
+    <div id="table-container"></div>
+    <div id="trends-container" class="hidden"></div>
+    <div id="bar-container" class="hidden" style="max-width:560px;margin:20px auto 0;">
+      <canvas id="bar-chart"></canvas>
+    </div>
+    <div style="display:flex; gap:12px; margin-top:16px; align-items:center; justify-content:center; flex-wrap:nowrap;">
+      <a href="/download">
+        <button>⬇ Download .xlsx</button>
+      </a>
+      <button id="save-btn" onclick="showSaveOverlay()">💾 Save Changes</button>
+      <button id="whatif-btn" class="btn-whatif" onclick="toggleWhatIf()">🔮 What If Mode</button>
+      <button id="whatif-reset-all-btn" class="hidden" onclick="resetAllSliders()">↺ Reset All</button>
+      <button id="trends-btn" class="btn-trends" onclick="toggleTrends()">📊 Trends</button>
+    </div>
+    <div id="save-msg"></div>
+  </div>
+
+</div>
+
+<!-- Save / Discard overlay -->
+<div id="save-overlay" class="overlay hidden">
+  <div class="overlay-box">
+    <h3>Save Changes?</h3>
+    <p>Save your edits and regenerate the report, or discard and revert to the last saved version.</p>
+    <div class="overlay-actions">
+      <button onclick="confirmSave()">✅ Save</button>
+      <button class="btn-red" onclick="confirmDiscard()">✖ Discard</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  Chart.register(ChartDataLabels);
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  let selectedFile      = null;
+  let categories        = [];           // [{ name, amount }]
+  let assignments       = {};           // { cat_name: bucket_label }
+  let tableData         = null;         // current rendered table data
+  let originalTableData = null;         // snapshot at last save/generate
+  let trendData         = null;         // { monthly_breakdown, trend_months }
+  const BUCKETS = ["Necessities", "Luxuries", "Future Self", "Leave Out"];
+
+  // ── Step 1: File select ──────────────────────────────────────────────────
+  function handleFileSelect(input) {
+    selectedFile = input.files[0];
+    document.getElementById("file-name").textContent =
+      selectedFile ? `Selected: ${selectedFile.name}` : "";
+    document.getElementById("upload-btn").disabled = !selectedFile;
+  }
+
+  async function uploadFile() {
+    const btn = document.getElementById("upload-btn");
+    const msg = document.getElementById("upload-msg");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Scanning...';
+    msg.innerHTML = "";
+
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+
+    try {
+      const res  = await fetch("/upload", { method: "POST", body: formData });
+      const data = await res.json();
+
+      if (data.error) {
+        msg.innerHTML = `<div class="msg msg-error">❌ ${data.error}</div>`;
+        btn.disabled = false;
+        btn.textContent = "Scan My Spreadsheet";
+        return;
+      }
+
+      // Show expenses and income
+      const totalExpenses = data.categories.reduce((sum, c) => sum + c.amount, 0);
+      document.getElementById("expenses-display").textContent = formatDollar(totalExpenses);
+      document.getElementById("income-display").textContent = formatDollar(data.income);
+
+      // Build month checkboxes
+      const monthBox = document.getElementById("month-checkboxes");
+      monthBox.innerHTML = "";
+      data.months_found.forEach(m => {
+        const label = document.createElement("label");
+        label.style.cssText = "display:flex;align-items:center;gap:4px;cursor:pointer;";
+        label.innerHTML = `<input type="checkbox" value="${m}" checked> ${m}`;
+        monthBox.appendChild(label);
+      });
+
+      // Build category rows
+      categories = data.categories;
+      assignments = {};
+      buildCategoryRows(categories);
+
+      // Transition to step 2
+      document.getElementById("step1-card").style.opacity = "0.5";
+      document.getElementById("step2-card").classList.remove("hidden");
+      document.getElementById("step2-card").scrollIntoView({ behavior: "smooth" });
+
+      btn.innerHTML = "✅ Done";
+      msg.innerHTML =
+        `<div class="msg msg-success">✅ Found data from: ${data.months_found.join(", ")}</div>`;
+      return;
+
+    } catch (e) {
+      msg.innerHTML = `<div class="msg msg-error">❌ Something went wrong: ${e.message}</div>`;
+    }
+
+    btn.disabled = false;
+    btn.textContent = "Scan My Spreadsheet";
+  }
+
+  // ── Step 2: Category assignment ──────────────────────────────────────────
+  function buildCategoryRows(cats) {
+    const list = document.getElementById("category-list");
+    list.innerHTML = "";
+
+    cats.forEach(cat => {
+      const row = document.createElement("div");
+      row.className = "cat-row";
+      row.id = `row-${sanitizeId(cat.name)}`;
+
+      const info = document.createElement("div");
+      info.className = "cat-info";
+      info.innerHTML = `
+        <div class="cat-name">${cat.name}</div>
+        <div class="cat-avg">Avg monthly: ${formatDollar(cat.amount)}</div>
+      `;
+
+      const choices = document.createElement("div");
+      choices.className = "bucket-choices";
+
+      BUCKETS.forEach(bucket => {
+        const btn = document.createElement("button");
+        btn.className = "choice-btn";
+        btn.textContent = bucket;
+        btn.dataset.bucket = bucket;
+        btn.onclick = () => selectBucket(cat.name, bucket);
+        choices.appendChild(btn);
+      });
+
+      row.appendChild(info);
+      row.appendChild(choices);
+      list.appendChild(row);
+    });
+
+    updateProgress();
+  }
+
+  function sanitizeId(name) {
+    return name.replace(/[^a-zA-Z0-9]/g, "_");
+  }
+
+  function selectBucket(catName, bucket) {
+    assignments[catName] = bucket;
+
+    // Update button styles in this row
+    const row = document.getElementById(`row-${sanitizeId(catName)}`);
+    row.querySelectorAll(".choice-btn").forEach(btn => {
+      btn.className = "choice-btn";
+      if (btn.dataset.bucket === bucket) {
+        const key = bucket.replace(" ", "");
+        btn.classList.add(`selected-${key}`);
+      }
+    });
+
+    updateProgress();
+  }
+
+  function updateProgress() {
+    const total   = categories.length;
+    const labeled = Object.keys(assignments).length;
+    const pct     = total ? Math.round((labeled / total) * 100) : 0;
+
+    document.getElementById("progress-fill").style.width = pct + "%";
+    document.getElementById("progress-text").textContent =
+      `${labeled} of ${total} labeled`;
+    document.getElementById("generate-btn").disabled = (labeled < total);
+  }
+
+  // ── Step 3: Generate ─────────────────────────────────────────────────────
+  async function generateReport() {
+    const btn = document.getElementById("generate-btn");
+    const msg = document.getElementById("generate-msg");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Building your report...';
+    msg.innerHTML = "";
+
+    try {
+      const selected_months = Array.from(
+        document.querySelectorAll("#month-checkboxes input:checked")
+      ).map(cb => cb.value);
+
+      const res  = await fetch("/generate", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ assignments, selected_months })
+      });
+      const data = await res.json();
+
+      if (data.error) {
+        msg.innerHTML = `<div class="msg msg-error">❌ ${data.error}</div>`;
+        btn.disabled = false;
+        btn.textContent = "⚡ Generate My Awareness Report";
+        return;
+      }
+
+      renderTable(data.table);
+      originalTableData = JSON.parse(JSON.stringify(data.table));
+      trendData = { breakdown: data.monthly_breakdown, months: data.trend_months };
+
+      btn.innerHTML = "✅ Done";
+
+      document.getElementById("step2-card").style.opacity = "0.5";
+      document.getElementById("step3-card").classList.remove("hidden");
+      document.getElementById("step3-card").scrollIntoView({ behavior: "smooth" });
+
+    } catch (e) {
+      msg.innerHTML = `<div class="msg msg-error">❌ ${e.message}</div>`;
+      btn.disabled = false;
+      btn.textContent = "⚡ Generate My Awareness Report";
+    }
+  }
+
+  // ── Table rendering ───────────────────────────────────────────────────────
+  const BUCKET_COLORS = {
+    "Necessities": "#dbeef7",
+    "Luxuries":    "#daf2e5",
+    "Future Self": "#fef0e0"
+  };
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderTable(data) {
+    tableData = data;
+    const income = data.income;
+    let html = `<table class="preview-table">`;
+
+    html += `<tr><td colspan="5" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">THE AWARENESS ENGINE — My Financial Reality</td></tr>`;
+    html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
+    html += `<tr>
+      <td style="font-weight:bold;">Total Income</td>
+      <td style="font-weight:bold;text-align:right;">${formatDollar(income)}</td>
+      <td></td>
+      <td></td>
+      <td style="font-weight:bold;text-align:center;">100%</td>
+    </tr>`;
+    html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
+
+    data.buckets.forEach(bucket => {
+      const color = BUCKET_COLORS[bucket.name] || "#f8f8f8";
+      html += `<tr><td colspan="5" style="background:${color};font-weight:bold;font-size:13px;padding:10px;">▶ ${escapeHtml(bucket.name.toUpperCase())}</td></tr>`;
+      html += `<tr style="font-size:11px;font-weight:bold;text-align:center;">
+        <td style="background:${color};">Category</td>
+        <td style="background:${color};">Total Spending (all months)</td>
+        <td style="background:${color};">Avg Monthly Spending</td>
+        <td style="background:${color};">% of Income</td>
+        <td style="background:${color};"></td>
+      </tr>`;
+
+      if (bucket.categories.length === 0) {
+        html += `<tr><td colspan="4" style="background:${color};color:#888;">(No categories assigned)</td><td style="background:${color};"></td></tr>`;
+      } else {
+        bucket.categories.forEach(cat => {
+          const pct = income ? ((cat.raw_total / income) * 100).toFixed(1) : "0.0";
+          html += `<tr class="cat-data-row" data-bucket="${escapeHtml(bucket.name)}">
+            <td class="editable" contenteditable="true" style="background:${color};" data-field="name">${escapeHtml(cat.name)}</td>
+            <td style="background:${color};text-align:right;" data-field="raw_total">${formatDollar(cat.raw_total)}</td>
+            <td class="editable" contenteditable="true" style="background:${color};text-align:right;" data-field="amt" data-raw="${cat.amt}">${formatDollar(cat.amt)}</td>
+            <td class="cat-pct" style="background:${color};text-align:center;">${pct}%</td>
+            <td style="background:${color};"><div class="slider-wrap"><span class="slider-bubble hidden"></span><input type="range" class="whatif-slider" min="0" max="${cat.amt * 2 || 1000}" step="1" value="${cat.amt}" data-original="${cat.amt}"><button class="whatif-reset-btn hidden" onclick="resetSlider(this)" title="Reset to original">↺</button></div></td>
+          </tr>`;
+        });
+      }
+
+      html += `<tr>
+        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">TOTAL — ${escapeHtml(bucket.name)}</td>
+        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:right;">${formatDollar(bucket.raw_total)}</td>
+        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:right;">${formatDollar(bucket.total)}</td>
+        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">${bucket.pct_income.toFixed(1)}%</td>
+        <td style="background:#2c3e50;color:white;"></td>
+      </tr>`;
+      html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
+    });
+
+    html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
+    html += `<tr><td colspan="5" style="background:#1a5276;color:white;font-weight:bold;font-size:13px;text-align:center;padding:10px;">─── GRAND REVEAL ───</td></tr>`;
+    html += `<tr style="background:#1a5276;color:white;font-size:11px;font-weight:bold;text-align:center;">
+      <td>Bucket</td><td>Total Spending (all months)</td><td>Avg Monthly Spending</td><td>% of Spending</td><td>% of Income</td>
+    </tr>`;
+    data.grand_reveal.forEach(row => {
+      html += `<tr style="text-align:center;font-weight:bold;">
+        <td>${escapeHtml(row.name.toUpperCase())}</td>
+        <td>${formatDollar(row.raw_total)}</td>
+        <td>${formatDollar(row.total)}</td>
+        <td>${row.pct_spending.toFixed(1)}%</td>
+        <td>${row.pct_income.toFixed(1)}%</td>
+      </tr>`;
+    });
+    html += `<tr style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">
+      <td>TOTAL SPENDING</td>
+      <td>${formatDollar(data.total_raw_spending)}</td>
+      <td>${formatDollar(data.total_spending)}</td>
+      <td>100.0%</td>
+      <td>${data.total_pct_income.toFixed(1)}%</td>
+    </tr>`;
+    const remaining = data.remaining_income;
+    const remainingPct = data.income > 0 ? ((remaining / data.income) * 100).toFixed(1) : "0.0";
+    const remColor = remaining < 0 ? "#c0392b" : "#145a32";
+    const remBg   = remaining < 0 ? "#FDECEA"  : "#D5F5E3";
+    html += `<tr style="background:${remBg};color:${remColor};font-weight:bold;text-align:center;">
+      <td>💰 Remaining Income</td>
+      <td>${formatDollar(remaining)}</td>
+      <td>—</td>
+      <td>—</td>
+      <td>${remainingPct}%</td>
+    </tr>`;
+    html += `</table>`;
+
+    document.getElementById("table-container").innerHTML = html;
+    attachEditListeners();
+    attachSliderListeners();
+    renderBarChart(data);
+  }
+
+  let barChartInstance = null;
+
+  function renderBarChart(data) {
+    const totalSpending = data.total_spending || 1;
+    const labels = data.buckets.map(b => b.name);
+    const values = data.buckets.map(b => b.total);
+    const pcts = data.buckets.map(b => parseFloat(((b.total / totalSpending) * 100).toFixed(1)));
+    const colors = data.buckets.map(b => BUCKET_COLORS[b.name] || "#ccc");
+    const borderColors = ["#4fa8bc", "#5fa87c", "#d47a56"];
+
+    document.getElementById("bar-container").classList.remove("hidden");
+
+    if (barChartInstance) {
+      barChartInstance.destroy();
+    }
+
+    barChartInstance = new Chart(document.getElementById("bar-chart"), {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [{
+          data: pcts,
+          backgroundColor: colors,
+          borderColor: borderColors,
+          borderWidth: 2,
+          borderRadius: 6
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          datalabels: {
+            anchor: 'end',
+            align: 'top',
+            formatter: val => val + '%',
+            font: { family: 'DM Sans', size: 13, weight: '600' },
+            color: '#333'
+          },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` ${ctx.parsed.y}% — ${formatDollar(values[ctx.dataIndex])}`
+            }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            max: 100,
+            ticks: {
+              font: { family: "DM Sans", size: 12 },
+              callback: val => val + "%"
+            },
+            grid: { color: "#ebebeb" }
+          },
+          x: {
+            ticks: { font: { family: "DM Sans", size: 13, weight: "600" } },
+            grid: { display: false }
+          }
+        }
+      }
+    });
+  }
+
+  function attachEditListeners() {
+    document.querySelectorAll(".preview-table .editable").forEach(cell => {
+      cell.addEventListener("focus", function () {
+        if (this.dataset.field === "amt") {
+          this.textContent = this.dataset.raw;
+          const range = document.createRange();
+          range.selectNodeContents(this);
+          range.collapse(false);
+          window.getSelection().removeAllRanges();
+          window.getSelection().addRange(range);
+        }
+      });
+      cell.addEventListener("blur", function () {
+        if (this.dataset.field === "amt") {
+          const val = parseFloat(this.textContent.replace(/[^0-9.-]/g, "")) || 0;
+          this.dataset.raw = val;
+          this.textContent = formatDollar(val);
+        }
+        markDirty(this);
+      });
+    });
+  }
+
+  function markDirty(cell) {
+    cell.classList.add("edited");
+  }
+
+  // ── What If mode ─────────────────────────────────────────────────────────
+  let whatIfActive = false;
+
+  function toggleWhatIf() {
+    whatIfActive = !whatIfActive;
+    const btn = document.getElementById("whatif-btn");
+    const table = document.querySelector(".preview-table");
+    btn.classList.toggle("active", whatIfActive);
+    table.classList.toggle("whatif-active", whatIfActive);
+    if (!whatIfActive) {
+      document.getElementById("whatif-reset-all-btn").classList.add("hidden");
+    } else {
+      updateWhatIfResetAll();
+    }
+  }
+
+  function attachSliderListeners() {
+    document.querySelectorAll(".preview-table .whatif-slider").forEach(slider => {
+      slider.addEventListener("input", function () {
+        const val = parseFloat(this.value);
+        const row = this.closest(".cat-data-row");
+        const amtCell = row.querySelector("[data-field='amt']");
+        amtCell.dataset.raw = val;
+
+        // Update displayed amount
+        amtCell.textContent = formatDollar(val);
+
+        // nMonths: used to scale avg→total so % of Income stays on the same
+        // scale as total income (avoids avg/total dimensional mismatch).
+        const income  = tableData.income;
+        const nMonths = (tableData.total_spending > 0)
+          ? tableData.total_raw_spending / tableData.total_spending : 1;
+        const pctOfIncome = (avg, inc) => inc ? ((avg * nMonths / inc) * 100).toFixed(1) : "0.0";
+
+        // Update % of income in this row
+        const pct = pctOfIncome(val, income);
+        row.querySelector(".cat-pct").textContent = pct + "%";
+
+        // Recalculate bucket total row
+        const bucket = row.dataset.bucket;
+        let bucketTotal = 0;
+        document.querySelectorAll(`.cat-data-row[data-bucket="${bucket}"]`).forEach(r => {
+          bucketTotal += parseFloat(r.querySelector("[data-field='amt']").dataset.raw) || 0;
+        });
+
+        // Find and update the TOTAL row for this bucket
+        // Columns: [0]=label [1]=raw_total(unchanged) [2]=avg [3]=pct_income [4]=slider
+        const allRows = Array.from(document.querySelectorAll(".preview-table tr"));
+        const totalLabel = `TOTAL — ${bucket}`;
+        allRows.forEach(r => {
+          const firstTd = r.querySelector("td");
+          if (firstTd && firstTd.textContent.trim() === totalLabel) {
+            const cells = r.querySelectorAll("td");
+            cells[2].textContent = formatDollar(bucketTotal);
+            cells[3].textContent = pctOfIncome(bucketTotal, income) + "%";
+          }
+        });
+
+        // Recalculate grand reveal
+        // Grand Reveal columns: [0]=bucket [1]=raw_total(unchanged) [2]=avg [3]=%spending [4]=%income
+        const allBuckets = {};
+        document.querySelectorAll(".preview-table .cat-data-row").forEach(r => {
+          const b = r.dataset.bucket;
+          if (!allBuckets[b]) allBuckets[b] = 0;
+          allBuckets[b] += parseFloat(r.querySelector("[data-field='amt']").dataset.raw) || 0;
+        });
+        const totalSpending = Object.values(allBuckets).reduce((a, b) => a + b, 0);
+
+        allRows.forEach(r => {
+          const firstTd = r.querySelector("td");
+          if (!firstTd) return;
+          const label = firstTd.textContent.trim();
+
+          Object.keys(allBuckets).forEach(b => {
+            if (label === b.toUpperCase()) {
+              const cells = r.querySelectorAll("td");
+              cells[2].textContent = formatDollar(allBuckets[b]);
+              cells[3].textContent = totalSpending ? ((allBuckets[b] / totalSpending) * 100).toFixed(1) + "%" : "0.0%";
+              cells[4].textContent = pctOfIncome(allBuckets[b], income) + "%";
+            }
+          });
+
+          // TOTAL SPENDING: [0]=label [1]=raw_total(unchanged) [2]=avg [3]=100% [4]=%income
+          if (label === "TOTAL SPENDING") {
+            const cells = r.querySelectorAll("td");
+            cells[2].textContent = formatDollar(totalSpending);
+            cells[4].textContent = pctOfIncome(totalSpending, income) + "%";
+          }
+        });
+
+        // Update bubble position and content
+        const bubble = this.closest(".slider-wrap")?.querySelector(".slider-bubble");
+        if (bubble) {
+          const pos = (this.value - this.min) / (this.max - this.min);
+          bubble.style.left = `calc(${pos * 100}% + ${8 - pos * 16}px)`;
+          bubble.textContent = pct + "%";
         }
 
-        return jsonify({
-            "success": True,
-            "table": build_table_data(averages, assignments, totals),
-            "monthly_breakdown": monthly_breakdown,
-            "trend_months": active_months
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        // Show/hide per-slider reset button
+        const resetBtn = this.closest("td").querySelector(".whatif-reset-btn");
+        if (resetBtn) {
+          resetBtn.classList.toggle("hidden",
+            parseFloat(this.value) === parseFloat(this.dataset.original));
+        }
+        updateWhatIfResetAll();
+      });
 
+      slider.addEventListener("pointerdown", function () {
+        const bubble = this.closest(".slider-wrap")?.querySelector(".slider-bubble");
+        if (bubble) {
+          const income = tableData ? tableData.income : 0;
+          const nMonths = (tableData && tableData.total_spending > 0)
+            ? tableData.total_raw_spending / tableData.total_spending : 1;
+          const pct = income ? ((parseFloat(this.value) * nMonths / income) * 100).toFixed(1) : "0.0";
+          const pos = (this.value - this.min) / (this.max - this.min);
+          bubble.style.left = `calc(${pos * 100}% + ${8 - pos * 16}px)`;
+          bubble.textContent = pct + "%";
+          bubble.classList.remove("hidden");
+        }
+      });
 
-@app.route("/save", methods=["POST"])
-def save():
-    data = request.get_json()
-    income = float(data.get("income", 0))
-    buckets_input = data.get("buckets", {})   # { bucket_name: [{name, amt}, ...] }
+      slider.addEventListener("pointerup", function () {
+        const bubble = this.closest(".slider-wrap")?.querySelector(".slider-bubble");
+        if (bubble) bubble.classList.add("hidden");
+      });
+    });
+  }
 
-    averages = {"income": income}
-    assignments = {}
-    for bucket_name, cats in buckets_input.items():
-        for cat in cats:
-            averages[cat["name"]] = float(cat["amt"])
-            assignments[cat["name"]] = bucket_name
-
-    monthly_data = session.get("monthly_data")
-    active_months = session.get("active_months")
-    totals = compute_totals(monthly_data, active_months) if monthly_data else {}
-
-    try:
-        old_path = session.get("output_path")
-        if old_path and os.path.exists(old_path):
-            os.unlink(old_path)
-
-        output_path = build_output_xlsx(averages, assignments, totals)
-        session["output_path"] = output_path
-        session["averages"] = averages
-        session["assignments"] = assignments
-        return jsonify({"success": True, "table": build_table_data(averages, assignments, totals)})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/download")
-def download():
-    output_path = session.get("output_path")
-    if not output_path or not os.path.exists(output_path):
-        return "No file ready. Please generate first.", 400
-
-    @after_this_request
-    def cleanup(response):
-        try:
-            os.unlink(output_path)
-            session.pop("output_path", None)
-        except Exception:
-            pass
-        return response
-
-    return send_file(output_path, as_attachment=True,
-                     download_name="Awareness_Engine_Results.xlsx")
-
-
-@app.route("/template/download", methods=["POST"])
-def template_download():
-    data = request.get_json(force=True)
-    income = float(data.get("income", 0))
-    buckets = data.get("buckets", {})
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Budget Template"
-
-    header_font = Font(name="Calibri", bold=True, size=13, color="FFFFFF")
-    bucket_fonts = {
-        "Necessities":  Font(name="Calibri", bold=True, size=12, color="1A6380"),
-        "Luxuries":     Font(name="Calibri", bold=True, size=12, color="2E7D52"),
-        "Future Self":  Font(name="Calibri", bold=True, size=12, color="A0522D"),
+  function updateWhatIfResetAll() {
+    const anyChanged = Array.from(
+      document.querySelectorAll(".whatif-slider")
+    ).some(s => parseFloat(s.value) !== parseFloat(s.dataset.original));
+    const resetAllBtn = document.getElementById("whatif-reset-all-btn");
+    if (whatIfActive && anyChanged) {
+      resetAllBtn.classList.remove("hidden");
+    } else {
+      resetAllBtn.classList.add("hidden");
     }
-    bucket_fills = {
-        "Necessities":  PatternFill("solid", fgColor="DBF0F7"),
-        "Luxuries":     PatternFill("solid", fgColor="DAF2E5"),
-        "Future Self":  PatternFill("solid", fgColor="FEF0E0"),
+  }
+
+  function resetSlider(resetBtn) {
+    const slider = resetBtn.closest("td").querySelector(".whatif-slider");
+    slider.value = slider.dataset.original;
+    slider.dispatchEvent(new Event("input"));
+  }
+
+  function resetAllSliders() {
+    document.querySelectorAll(".whatif-slider").forEach(slider => {
+      slider.value = slider.dataset.original;
+      slider.dispatchEvent(new Event("input"));
+    });
+  }
+
+  // ── Trends ───────────────────────────────────────────────────────────────
+  let trendsActive = false;
+
+  function toggleTrends() {
+    trendsActive = !trendsActive;
+    document.getElementById("trends-btn").classList.toggle("active", trendsActive);
+    document.getElementById("table-container").classList.toggle("hidden", trendsActive);
+    const tc = document.getElementById("trends-container");
+    if (trendsActive) {
+      tc.classList.remove("hidden");
+      renderTrends();
+    } else {
+      tc.classList.add("hidden");
     }
-    header_fill = PatternFill("solid", fgColor="0F1F3D")
-    thin = Side(style="thin", color="CCCCCC")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    center = Alignment(horizontal="center", vertical="center")
-    right_align = Alignment(horizontal="right", vertical="center")
+  }
 
-    # Header row
-    ws.merge_cells("A1:B1")
-    ws["A1"] = "Budget Template"
-    ws["A1"].font = header_font
-    ws["A1"].fill = header_fill
-    ws["A1"].alignment = center
+  function renderTrends() {
+    const { breakdown, months } = trendData;
+    const bucketOrder = ["Necessities", "Luxuries", "Future Self"];
 
-    # Income row
-    ws["A2"] = "Monthly Income"
-    ws["A2"].font = Font(name="Calibri", bold=True, size=12)
-    ws["B2"] = income
-    ws["B2"].number_format = '"$"#,##0.00'
-    ws["B2"].alignment = right_align
-    ws["A2"].border = border
-    ws["B2"].border = border
+    let html = `<table class="preview-table">`;
+    html += `<tr><td colspan="${months.length + 1}" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">📊 Month-by-Month Trend</td></tr>`;
 
-    row = 4
-    bucket_totals = {}
-    for bucket_name in BUCKET_LABELS:
-        cats = buckets.get(bucket_name, [])
-        # Bucket header
-        ws.merge_cells(f"A{row}:B{row}")
-        ws[f"A{row}"] = bucket_name.upper()
-        ws[f"A{row}"].font = bucket_fonts[bucket_name]
-        ws[f"A{row}"].fill = bucket_fills[bucket_name]
-        ws[f"A{row}"].alignment = center
-        ws[f"A{row}"].border = border
-        row += 1
+    // Header row
+    html += `<tr style="font-weight:bold;text-align:center;background:#f4f4f1;">
+      <td style="text-align:left;">Category</td>
+      ${months.map(m => `<td>${m}</td>`).join("")}
+    </tr>`;
 
-        total = 0
-        for item in cats:
-            name = item.get("name", "")
-            amt = float(item.get("amount", 0))
-            total += amt
-            ws[f"A{row}"] = name
-            ws[f"B{row}"] = amt
-            ws[f"B{row}"].number_format = '"$"#,##0.00'
-            ws[f"A{row}"].border = border
-            ws[f"B{row}"].border = border
-            ws[f"B{row}"].alignment = right_align
-            row += 1
+    bucketOrder.forEach(bucket => {
+      const cats = Object.keys(breakdown).filter(cat =>
+        tableData.buckets.find(b => b.name === bucket && b.categories.find(c => c.name === cat))
+      );
+      if (cats.length === 0) return;
 
-        bucket_totals[bucket_name] = total
+      const color = BUCKET_COLORS[bucket] || "#f8f8f8";
+      html += `<tr><td colspan="${months.length + 1}" style="background:${color};font-weight:bold;font-size:13px;padding:8px;">▶ ${bucket.toUpperCase()}</td></tr>`;
 
-        # Subtotal
-        ws[f"A{row}"] = "Subtotal"
-        ws[f"A{row}"].font = Font(name="Calibri", bold=True, size=11)
-        ws[f"B{row}"] = total
-        ws[f"B{row}"].number_format = '"$"#,##0.00'
-        ws[f"B{row}"].font = Font(name="Calibri", bold=True, size=11)
-        ws[f"A{row}"].border = border
-        ws[f"B{row}"].border = border
-        ws[f"B{row}"].alignment = right_align
-        row += 2
+      cats.forEach(cat => {
+        const amts = months.map(m => breakdown[cat]?.[m] ?? 0);
+        html += `<tr>
+          <td style="background:${color};">${escapeHtml(cat)}</td>
+          ${amts.map(a => `<td style="background:${color};text-align:right;">${formatDollar(a)}</td>`).join("")}
+        </tr>`;
+      });
+    });
 
-    # Grand Reveal
-    row += 1  # spacer
-    reveal_fill  = PatternFill("solid", fgColor="0F1F3D")
-    reveal_font  = Font(name="Calibri", bold=True, size=12, color="FFFFFF")
-    sub_hdr_fill = PatternFill("solid", fgColor="F4F4F1")
-    sub_hdr_font = Font(name="Calibri", bold=True, size=11)
-    total_fill   = PatternFill("solid", fgColor="2C3E50")
-    total_font_w = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
+    html += `</table>`;
+    document.getElementById("trends-container").innerHTML = html;
+  }
 
-    # Merge across 4 columns for Grand Reveal — widen sheet first
-    ws.merge_cells(f"A{row}:D{row}")
-    ws[f"A{row}"] = "⚡ GRAND REVEAL"
-    ws[f"A{row}"].font = reveal_font
-    ws[f"A{row}"].fill = reveal_fill
-    ws[f"A{row}"].alignment = center
-    ws[f"A{row}"].border = border
-    row += 1
+  function showSaveOverlay() {
+    document.getElementById("save-overlay").classList.remove("hidden");
+  }
 
-    # Column headers
-    for col, label in [("A", "Bucket"), ("B", "Amount"), ("C", "% of Income"), ("D", "% of Spending")]:
-        ws[f"{col}{row}"] = label
-        ws[f"{col}{row}"].font = sub_hdr_font
-        ws[f"{col}{row}"].fill = sub_hdr_fill
-        ws[f"{col}{row}"].alignment = center
-        ws[f"{col}{row}"].border = border
-    row += 1
+  function confirmDiscard() {
+    document.getElementById("save-overlay").classList.add("hidden");
+    document.getElementById("save-msg").innerHTML = "";
+    renderTable(JSON.parse(JSON.stringify(originalTableData)));
+  }
 
-    total_spending = sum(bucket_totals.values())
+  async function confirmSave() {
+    document.getElementById("save-overlay").classList.add("hidden");
+    const msg = document.getElementById("save-msg");
+    msg.innerHTML = "";
 
-    for bucket_name, b_fill in bucket_fills.items():
-        amt = bucket_totals[bucket_name]
-        pct_inc = round((amt / income * 100), 1) if income else 0.0
-        pct_spd = round((amt / total_spending * 100), 1) if total_spending else 0.0
-        ws[f"A{row}"] = bucket_name
-        ws[f"B{row}"] = amt
-        ws[f"C{row}"] = f"{pct_inc:.1f}%"
-        ws[f"D{row}"] = f"{pct_spd:.1f}%"
-        for col in ["A", "B", "C", "D"]:
-            ws[f"{col}{row}"].fill = b_fill
-            ws[f"{col}{row}"].font = Font(name="Calibri", bold=True, size=11)
-            ws[f"{col}{row}"].alignment = center
-            ws[f"{col}{row}"].border = border
-        ws[f"B{row}"].number_format = '"$"#,##0.00'
-        row += 1
+    const editedBuckets = {};
+    document.querySelectorAll(".preview-table .cat-data-row").forEach(row => {
+      const bucket = row.dataset.bucket;
+      if (!editedBuckets[bucket]) editedBuckets[bucket] = [];
+      const nameCell = row.querySelector("[data-field='name']");
+      const amtCell  = row.querySelector("[data-field='amt']");
+      const amt = parseFloat(String(amtCell.dataset.raw || amtCell.textContent).replace(/[^0-9.-]/g, "")) || 0;
+      editedBuckets[bucket].push({ name: nameCell.textContent.trim(), amt });
+    });
 
-    # Total row
-    total_pct_inc = round((total_spending / income * 100), 1) if income else 0.0
-    ws[f"A{row}"] = "TOTAL EXPENSES"
-    ws[f"B{row}"] = total_spending
-    ws[f"C{row}"] = f"{total_pct_inc:.1f}%"
-    ws[f"D{row}"] = "100.0%"
-    for col in ["A", "B", "C", "D"]:
-        ws[f"{col}{row}"].font = total_font_w
-        ws[f"{col}{row}"].fill = total_fill
-        ws[f"{col}{row}"].alignment = center
-        ws[f"{col}{row}"].border = border
-    ws[f"B{row}"].number_format = '"$"#,##0.00'
+    try {
+      const res  = await fetch("/save", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ income: tableData.income, buckets: editedBuckets })
+      });
+      const data = await res.json();
 
-    # Remaining Income row
-    row += 1
-    remaining = income - total_spending
-    remaining_pct = round((remaining / income * 100), 1) if income else 0.0
-    if remaining >= 0:
-        rem_fill = PatternFill("solid", fgColor="D5F5E3")
-        rem_font = Font(name="Calibri", bold=True, size=11, color="145A32")
-    else:
-        rem_fill = PatternFill("solid", fgColor="FDECEA")
-        rem_font = Font(name="Calibri", bold=True, size=11, color="C0392B")
-    ws[f"A{row}"] = "Remaining Income"
-    ws[f"B{row}"] = remaining
-    ws[f"C{row}"] = f"{remaining_pct:.1f}%"
-    ws[f"D{row}"] = "—"
-    for col in ["A", "B", "C", "D"]:
-        ws[f"{col}{row}"].fill = rem_fill
-        ws[f"{col}{row}"].font = rem_font
-        ws[f"{col}{row}"].alignment = center
-        ws[f"{col}{row}"].border = border
-    ws[f"B{row}"].number_format = '"$"#,##0.00'
+      if (data.error) {
+        msg.innerHTML = `<div class="msg msg-error">❌ ${data.error}</div>`;
+        return;
+      }
 
-    # Column widths
-    ws.column_dimensions["A"].width = 28
-    ws.column_dimensions["B"].width = 16
-    ws.column_dimensions["C"].width = 14
-    ws.column_dimensions["D"].width = 14
-
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-    wb.save(tmp.name)
-    tmp.close()
-    tmp_path = tmp.name
-
-    @after_this_request
-    def cleanup_tmpl(response):
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-        return response
-
-    return send_file(tmp_path, as_attachment=True,
-                     download_name="Budget_Template.xlsx")
-
-
-@app.route("/three-month/download", methods=["POST"])
-def three_month_download():
-    data = request.get_json(force=True)
-    incomes = [float(v) for v in data.get("incomes", [0, 0, 0])]
-    month_names = data.get("month_names", ["Month 1", "Month 2", "Month 3"])
-    buckets_input = data.get("buckets", {})
-
-    avg_income = sum(incomes) / 3
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Budget Template"
-
-    header_font = Font(name="Calibri", bold=True, size=13, color="FFFFFF")
-    bucket_fonts = {
-        "Necessities":  Font(name="Calibri", bold=True, size=12, color="1A6380"),
-        "Luxuries":     Font(name="Calibri", bold=True, size=12, color="2E7D52"),
-        "Future Self":  Font(name="Calibri", bold=True, size=12, color="A0522D"),
+      originalTableData = JSON.parse(JSON.stringify(data.table));
+      renderTable(data.table);
+      msg.innerHTML = `<div class="msg msg-success">✅ Changes saved and report regenerated.</div>`;
+    } catch (e) {
+      msg.innerHTML = `<div class="msg msg-error">❌ ${e.message}</div>`;
     }
-    bucket_fills = {
-        "Necessities":  PatternFill("solid", fgColor="DBF0F7"),
-        "Luxuries":     PatternFill("solid", fgColor="DAF2E5"),
-        "Future Self":  PatternFill("solid", fgColor="FEF0E0"),
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function formatDollar(n) {
+    const abs = Math.abs(Number(n));
+    const s = "$" + abs.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return n < 0 ? "-" + s : s;
+  }
+
+  function resetApp() {
+    location.reload();
+  }
+
+  // ── Navigation ────────────────────────────────────────────────────────────
+  function goHome() {
+    document.getElementById("home-screen").classList.remove("hidden");
+    document.getElementById("builder-choice-screen").classList.add("hidden");
+    document.getElementById("step1-card").classList.add("hidden");
+    document.getElementById("template-card").classList.add("hidden");
+    document.getElementById("three-month-card").classList.add("hidden");
+  }
+
+  function chooseUpload() {
+    document.getElementById("home-screen").classList.add("hidden");
+    document.getElementById("step1-card").classList.remove("hidden");
+    document.getElementById("step1-card").scrollIntoView({ behavior: "smooth" });
+  }
+
+  function chooseBuild() {
+    document.getElementById("home-screen").classList.add("hidden");
+    document.getElementById("builder-choice-screen").classList.remove("hidden");
+    document.getElementById("builder-choice-screen").scrollIntoView({ behavior: "smooth" });
+  }
+
+  function chooseSingleMonth() {
+    document.getElementById("builder-choice-screen").classList.add("hidden");
+    document.getElementById("template-card").classList.remove("hidden");
+    document.getElementById("template-card").scrollIntoView({ behavior: "smooth" });
+  }
+
+  function chooseThreeMonth() {
+    document.getElementById("builder-choice-screen").classList.add("hidden");
+    document.getElementById("three-month-card").classList.remove("hidden");
+    document.getElementById("three-month-card").scrollIntoView({ behavior: "smooth" });
+  }
+
+  // ── Single Month Budget Builder ───────────────────────────────────────────
+  function tmplKey(bucket) { return bucket.replace(/\s+/g, "-").toLowerCase(); }
+
+  const TMPL_DEFAULTS = {
+    "Necessities": ["Rent / Mortgage", "Groceries", "Utilities", "Transportation", "Insurance", "Phone Bill"],
+    "Luxuries":    ["Dining Out", "Entertainment", "Shopping", "Subscriptions", "Personal Care"],
+    "Future Self": ["Emergency Fund", "Retirement (401k/IRA)", "Investments", "Education / Skills", "Debt Payoff"]
+  };
+
+  function tmplAddRow(bucket, name = "", amount = "") {
+    const container = document.getElementById("tmpl-rows-" + tmplKey(bucket));
+    const row = document.createElement("tr");
+    row.className = "tmpl-row";
+    row.innerHTML = `
+      <td><input type="text" placeholder="Category name" value="${name}" oninput="tmplRecalculate()"></td>
+      <td style="width:120px;"><input type="number" placeholder="0.00" value="${amount}" min="0" step="0.01" oninput="tmplRecalculate()"></td>
+      <td style="width:36px;text-align:center;"><button class="tmpl-remove-btn" onclick="this.closest('.tmpl-row').remove(); tmplRecalculate();" title="Remove">✕</button></td>
+    `;
+    container.appendChild(row);
+    tmplRecalculate();
+  }
+
+  function tmplRecalculate() {
+    const income = parseFloat(document.getElementById("tmpl-income").value) || 0;
+    const subtotals = {};
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const key = tmplKey(bucket);
+      const rows = document.querySelectorAll("#tmpl-rows-" + key + " .tmpl-row");
+      let subtotal = 0;
+      rows.forEach(row => {
+        const amt = parseFloat(row.querySelector("input[type='number']").value) || 0;
+        subtotal += amt;
+      });
+      subtotals[key] = subtotal;
+      document.getElementById("tmpl-sub-" + key).textContent = "$" + subtotal.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      const pctEl = document.getElementById("tmpl-pct-" + key);
+      pctEl.textContent = income > 0 ? ((subtotal / income) * 100).toFixed(1) + "%" : "0%";
+    });
+
+    // Grand Reveal
+    const fmt = n => "$" + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    const totalExp = Object.values(subtotals).reduce((a, b) => a + b, 0);
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const key = tmplKey(bucket);
+      const amt = subtotals[key];
+      document.getElementById("gr-amt-" + key).textContent = fmt(amt);
+      document.getElementById("gr-inc-" + key).textContent = income > 0 ? ((amt / income) * 100).toFixed(1) + "%" : "0%";
+      document.getElementById("gr-spd-" + key).textContent = totalExp > 0 ? ((amt / totalExp) * 100).toFixed(1) + "%" : "0%";
+    });
+    document.getElementById("gr-total-expenses").textContent = fmt(totalExp);
+    document.getElementById("gr-total-pct-inc").textContent = income > 0 ? ((totalExp / income) * 100).toFixed(1) + "%" : "0%";
+    document.getElementById("gr-total-income").textContent = fmt(income);
+    const remaining = income - totalExp;
+    document.getElementById("gr-remaining").textContent = formatDollar(remaining);
+    document.getElementById("gr-remaining-pct").textContent = income > 0 ? ((remaining / income) * 100).toFixed(1) + "%" : "0%";
+    document.getElementById("gr-remaining-row").style.color = remaining < 0 ? "#c0392b" : "#145a32";
+  }
+
+  async function tmplDownload() {
+    const income = parseFloat(document.getElementById("tmpl-income").value) || 0;
+    const buckets = {};
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const rows = document.querySelectorAll("#tmpl-rows-" + tmplKey(bucket) + " .tmpl-row");
+      buckets[bucket] = [];
+      rows.forEach(row => {
+        const name = row.querySelector("input[type='text']").value.trim() || "Category";
+        const amount = parseFloat(row.querySelector("input[type='number']").value) || 0;
+        buckets[bucket].push({ name, amount });
+      });
+    });
+
+    const msgEl = document.getElementById("tmpl-msg");
+    msgEl.textContent = "";
+    try {
+      const resp = await fetch("/template/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ income, buckets })
+      });
+      if (!resp.ok) throw new Error("Server error: " + resp.status);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "Budget_Template.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      msgEl.textContent = "Download failed: " + e.message;
     }
-    header_fill  = PatternFill("solid", fgColor="0F1F3D")
-    thin         = Side(style="thin", color="CCCCCC")
-    border       = Border(left=thin, right=thin, top=thin, bottom=thin)
-    center       = Alignment(horizontal="center", vertical="center")
-    right_align  = Alignment(horizontal="right",  vertical="center")
+  }
 
-    # Title
-    ws.merge_cells("A1:B1")
-    ws["A1"] = f"Last 3 Months Budget — {' / '.join(month_names)}"
-    ws["A1"].font      = header_font
-    ws["A1"].fill      = header_fill
-    ws["A1"].alignment = center
+  // Populate default rows on load
+  (function initTemplate() {
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      TMPL_DEFAULTS[bucket].forEach(name => tmplAddRow(bucket, name, ""));
+    });
+  })();
 
-    # Avg Income
-    ws["A2"] = "Avg Monthly Income"
-    ws["A2"].font   = Font(name="Calibri", bold=True, size=12)
-    ws["B2"]        = round(avg_income, 2)
-    ws["B2"].number_format = '"$"#,##0.00'
-    ws["B2"].alignment = right_align
-    ws["A2"].border = border
-    ws["B2"].border = border
+  // ── Last 3 Months Budget Builder ─────────────────────────────────────────
+  const TM_DEFAULTS = {
+    "Necessities": ["Rent / Mortgage", "Groceries", "Utilities", "Transportation", "Insurance", "Phone Bill"],
+    "Luxuries":    ["Dining Out", "Entertainment", "Shopping", "Subscriptions", "Personal Care"],
+    "Future Self": ["Emergency Fund", "Retirement (401k/IRA)", "Investments", "Education / Skills", "Debt Payoff"]
+  };
 
-    row = 4
-    bucket_totals = {}
-    for bucket_name in BUCKET_LABELS:
-        cats = buckets_input.get(bucket_name, [])
-        ws.merge_cells(f"A{row}:B{row}")
-        ws[f"A{row}"]           = bucket_name.upper()
-        ws[f"A{row}"].font      = bucket_fonts[bucket_name]
-        ws[f"A{row}"].fill      = bucket_fills[bucket_name]
-        ws[f"A{row}"].alignment = center
-        ws[f"A{row}"].border    = border
-        row += 1
+  function tmThreeKey(bucket) { return bucket.replace(/\s+/g, "-").toLowerCase(); }
 
-        total = 0.0
-        for item in cats:
-            name    = item.get("name", "")
-            amounts = item.get("amounts", [0, 0, 0])
-            avg_amt = sum(amounts) / 3
-            total  += avg_amt
-            ws[f"A{row}"]              = name
-            ws[f"B{row}"]              = round(avg_amt, 2)
-            ws[f"B{row}"].number_format = '"$"#,##0.00'
-            ws[f"A{row}"].border       = border
-            ws[f"B{row}"].border       = border
-            ws[f"B{row}"].alignment    = right_align
-            row += 1
+  function tmThreeAddRow(bucket, name = "") {
+    const container = document.getElementById("tm-rows-" + tmThreeKey(bucket));
+    const row = document.createElement("tr");
+    row.className = "tmpl-row";
+    row.innerHTML = `
+      <td><input type="text" placeholder="Category name" value="${name}" oninput="tmThreeRecalculate()"></td>
+      <td style="width:110px;"><input type="number" placeholder="0.00" min="0" step="0.01" oninput="tmThreeRecalculate()"></td>
+      <td style="width:110px;"><input type="number" placeholder="0.00" min="0" step="0.01" oninput="tmThreeRecalculate()"></td>
+      <td style="width:110px;"><input type="number" placeholder="0.00" min="0" step="0.01" oninput="tmThreeRecalculate()"></td>
+      <td style="width:90px;text-align:right;font-weight:600;color:#0f1f3d;padding:6px 10px;" class="tm-row-avg">$0.00</td>
+      <td style="width:36px;text-align:center;"><button class="tmpl-remove-btn" onclick="this.closest('.tmpl-row').remove(); tmThreeRecalculate();" title="Remove">✕</button></td>
+    `;
+    container.appendChild(row);
+    tmThreeRecalculate();
+  }
 
-        bucket_totals[bucket_name] = total
-        ws[f"A{row}"]              = "Subtotal"
-        ws[f"A{row}"].font         = Font(name="Calibri", bold=True, size=11)
-        ws[f"B{row}"]              = round(total, 2)
-        ws[f"B{row}"].number_format = '"$"#,##0.00'
-        ws[f"B{row}"].font         = Font(name="Calibri", bold=True, size=11)
-        ws[f"A{row}"].border       = border
-        ws[f"B{row}"].border       = border
-        ws[f"B{row}"].alignment    = right_align
-        row += 2
+  function tmThreeUpdateHeaders() {
+    [1, 2, 3].forEach(i => {
+      const name = document.getElementById(`tm-month${i}-name`).value || `Month ${i}`;
+      document.querySelectorAll(`.tm-col-m${i}`).forEach(el => el.textContent = name);
+    });
+  }
 
-    # Grand Reveal
-    row += 1
-    reveal_fill  = PatternFill("solid", fgColor="0F1F3D")
-    reveal_font  = Font(name="Calibri", bold=True, size=12, color="FFFFFF")
-    sub_hdr_fill = PatternFill("solid", fgColor="F4F4F1")
-    sub_hdr_font = Font(name="Calibri", bold=True, size=11)
-    total_fill   = PatternFill("solid", fgColor="2C3E50")
-    total_font_w = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
+  function tmThreeRecalculate() {
+    tmThreeUpdateHeaders();
+    const incomes = [1, 2, 3].map(i => parseFloat(document.getElementById(`tm-income-${i}`).value) || 0);
+    const avgIncome = (incomes[0] + incomes[1] + incomes[2]) / 3;
+    const fmt = n => "$" + Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
-    ws.merge_cells(f"A{row}:D{row}")
-    ws[f"A{row}"]           = "⚡ GRAND REVEAL (3-Month Average)"
-    ws[f"A{row}"].font      = reveal_font
-    ws[f"A{row}"].fill      = reveal_fill
-    ws[f"A{row}"].alignment = center
-    ws[f"A{row}"].border    = border
-    row += 1
+    const subtotalAvgs = {};
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const key = tmThreeKey(bucket);
+      const rows = document.querySelectorAll(`#tm-rows-${key} .tmpl-row`);
+      let sub1 = 0, sub2 = 0, sub3 = 0;
+      rows.forEach(row => {
+        const amts = row.querySelectorAll("input[type='number']");
+        const a1 = parseFloat(amts[0].value) || 0;
+        const a2 = parseFloat(amts[1].value) || 0;
+        const a3 = parseFloat(amts[2].value) || 0;
+        sub1 += a1; sub2 += a2; sub3 += a3;
+        row.querySelector(".tm-row-avg").textContent = fmt((a1 + a2 + a3) / 3);
+      });
+      const subAvg = (sub1 + sub2 + sub3) / 3;
+      subtotalAvgs[key] = subAvg;
+      document.getElementById(`tm-sub-${key}`).textContent = fmt(subAvg);
+      document.getElementById(`tm-pct-${key}`).textContent =
+        avgIncome > 0 ? ((subAvg / avgIncome) * 100).toFixed(1) + "%" : "0%";
+    });
 
-    for col, label in [("A", "Bucket"), ("B", "Avg Amount"),
-                        ("C", "% of Avg Income"), ("D", "% of Spending")]:
-        ws[f"{col}{row}"]           = label
-        ws[f"{col}{row}"].font      = sub_hdr_font
-        ws[f"{col}{row}"].fill      = sub_hdr_fill
-        ws[f"{col}{row}"].alignment = center
-        ws[f"{col}{row}"].border    = border
-    row += 1
+    const totalExp = Object.values(subtotalAvgs).reduce((a, b) => a + b, 0);
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const key = tmThreeKey(bucket);
+      const amt = subtotalAvgs[key];
+      document.getElementById(`tm-gr-amt-${key}`).textContent = fmt(amt);
+      document.getElementById(`tm-gr-inc-${key}`).textContent =
+        avgIncome > 0 ? ((amt / avgIncome) * 100).toFixed(1) + "%" : "0%";
+      document.getElementById(`tm-gr-spd-${key}`).textContent =
+        totalExp > 0 ? ((amt / totalExp) * 100).toFixed(1) + "%" : "0%";
+    });
+    document.getElementById("tm-gr-total-expenses").textContent = fmt(totalExp);
+    document.getElementById("tm-gr-total-pct-inc").textContent =
+      avgIncome > 0 ? ((totalExp / avgIncome) * 100).toFixed(1) + "%" : "0%";
+    document.getElementById("tm-gr-total-income").textContent = fmt(avgIncome);
+    const remaining = avgIncome - totalExp;
+    document.getElementById("tm-gr-remaining").textContent = formatDollar(remaining);
+    document.getElementById("tm-gr-remaining-pct").textContent =
+      avgIncome > 0 ? ((remaining / avgIncome) * 100).toFixed(1) + "%" : "0%";
+    document.getElementById("tm-gr-remaining-row").style.color = remaining < 0 ? "#c0392b" : "#145a32";
+  }
 
-    total_spending = sum(bucket_totals.values())
-    for bucket_name, b_fill in bucket_fills.items():
-        amt     = bucket_totals[bucket_name]
-        pct_inc = round((amt / avg_income * 100), 1)    if avg_income    else 0.0
-        pct_spd = round((amt / total_spending * 100), 1) if total_spending else 0.0
-        ws[f"A{row}"] = bucket_name
-        ws[f"B{row}"] = round(amt, 2)
-        ws[f"C{row}"] = f"{pct_inc:.1f}%"
-        ws[f"D{row}"] = f"{pct_spd:.1f}%"
-        for col in ["A", "B", "C", "D"]:
-            ws[f"{col}{row}"].fill      = b_fill
-            ws[f"{col}{row}"].font      = Font(name="Calibri", bold=True, size=11)
-            ws[f"{col}{row}"].alignment = center
-            ws[f"{col}{row}"].border    = border
-        ws[f"B{row}"].number_format = '"$"#,##0.00'
-        row += 1
+  async function tmThreeDownload() {
+    const incomes = [1, 2, 3].map(i => parseFloat(document.getElementById(`tm-income-${i}`).value) || 0);
+    const monthNames = [1, 2, 3].map(i => document.getElementById(`tm-month${i}-name`).value.trim() || `Month ${i}`);
+    const buckets = {};
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      const rows = document.querySelectorAll(`#tm-rows-${tmThreeKey(bucket)} .tmpl-row`);
+      buckets[bucket] = [];
+      rows.forEach(row => {
+        const name = row.querySelector("input[type='text']").value.trim() || "Category";
+        const amts = row.querySelectorAll("input[type='number']");
+        buckets[bucket].push({ name, amounts: [0, 1, 2].map(i => parseFloat(amts[i].value) || 0) });
+      });
+    });
+    const msgEl = document.getElementById("tm-msg");
+    msgEl.textContent = "";
+    try {
+      const resp = await fetch("/three-month/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ incomes, month_names: monthNames, buckets })
+      });
+      if (!resp.ok) throw new Error("Server error: " + resp.status);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "Last_3_Months_Budget.xlsx";
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    } catch (e) { msgEl.textContent = "Download failed: " + e.message; }
+  }
 
-    total_pct_inc = round((total_spending / avg_income * 100), 1) if avg_income else 0.0
-    ws[f"A{row}"] = "TOTAL EXPENSES"
-    ws[f"B{row}"] = round(total_spending, 2)
-    ws[f"C{row}"] = f"{total_pct_inc:.1f}%"
-    ws[f"D{row}"] = "100.0%"
-    for col in ["A", "B", "C", "D"]:
-        ws[f"{col}{row}"].font      = total_font_w
-        ws[f"{col}{row}"].fill      = total_fill
-        ws[f"{col}{row}"].alignment = center
-        ws[f"{col}{row}"].border    = border
-    ws[f"B{row}"].number_format = '"$"#,##0.00'
-
-    row += 1
-    remaining     = avg_income - total_spending
-    remaining_pct = round((remaining / avg_income * 100), 1) if avg_income else 0.0
-    if remaining >= 0:
-        rem_fill = PatternFill("solid", fgColor="D5F5E3")
-        rem_font = Font(name="Calibri", bold=True, size=11, color="145A32")
-    else:
-        rem_fill = PatternFill("solid", fgColor="FDECEA")
-        rem_font = Font(name="Calibri", bold=True, size=11, color="C0392B")
-    ws[f"A{row}"] = "Remaining Income"
-    ws[f"B{row}"] = round(remaining, 2)
-    ws[f"C{row}"] = f"{remaining_pct:.1f}%"
-    ws[f"D{row}"] = "—"
-    for col in ["A", "B", "C", "D"]:
-        ws[f"{col}{row}"].fill      = rem_fill
-        ws[f"{col}{row}"].font      = rem_font
-        ws[f"{col}{row}"].alignment = center
-        ws[f"{col}{row}"].border    = border
-    ws[f"B{row}"].number_format = '"$"#,##0.00'
-
-    ws.column_dimensions["A"].width = 28
-    ws.column_dimensions["B"].width = 16
-    ws.column_dimensions["C"].width = 16
-    ws.column_dimensions["D"].width = 16
-
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-    wb.save(tmp.name)
-    tmp.close()
-    tmp_path = tmp.name
-
-    @after_this_request
-    def cleanup_three(response):
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-        return response
-
-    return send_file(tmp_path, as_attachment=True,
-                     download_name="Last_3_Months_Budget.xlsx")
-
-
-if __name__ == "__main__":
-    app.run(debug=True, port=5050)
+  (function initThreeMonth() {
+    ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
+      TM_DEFAULTS[bucket].forEach(name => tmThreeAddRow(bucket, name));
+    });
+  })();
+</script>
+</body>
+</html>
