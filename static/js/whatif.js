@@ -4,6 +4,9 @@
 let whatIfActive = false;
 
 function toggleWhatIf() {
+  // Cannot enter What If while Trends is active
+  if (trendsActive) return;
+
   whatIfActive = !whatIfActive;
   const btn = document.getElementById("whatif-btn");
   const table = document.querySelector(".preview-table");
@@ -161,9 +164,31 @@ function resetAllSliders() {
 }
 
 // ── Trends ───────────────────────────────────────────────────────────────
-let trendsActive = false;
+let trendsActive       = false;
+let trendsChartInstance = null;
+
+// Line colors match the bar chart border colors
+const TREND_LINE_COLORS = {
+  "Necessities": "#4fa8bc",
+  "Luxuries":    "#5fa87c",
+  "Future Self": "#d47a56"
+};
+const TREND_FILL_COLORS = {
+  "Necessities": "rgba(79,168,188,0.08)",
+  "Luxuries":    "rgba(95,168,124,0.08)",
+  "Future Self": "rgba(212,122,86,0.08)"
+};
 
 function toggleTrends() {
+  // If What If is active, turn it off before entering Trends
+  if (whatIfActive) {
+    whatIfActive = false;
+    const table = document.querySelector(".preview-table");
+    document.getElementById("whatif-btn").classList.remove("active");
+    document.getElementById("whatif-reset-all-btn").classList.add("hidden");
+    if (table) table.classList.remove("whatif-active");
+  }
+
   trendsActive = !trendsActive;
   document.getElementById("trends-btn").classList.toggle("active", trendsActive);
   document.getElementById("table-container").classList.toggle("hidden", trendsActive);
@@ -172,6 +197,10 @@ function toggleTrends() {
     tc.classList.remove("hidden");
     renderTrends();
   } else {
+    if (trendsChartInstance) {
+      trendsChartInstance.destroy();
+      trendsChartInstance = null;
+    }
     tc.classList.add("hidden");
   }
 }
@@ -180,32 +209,74 @@ function renderTrends() {
   const { breakdown, months } = trendData;
   const bucketOrder = ["Necessities", "Luxuries", "Future Self"];
 
-  let html = `<table class="preview-table">`;
-  html += `<tr><td colspan="${months.length + 1}" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">📊 Month-by-Month Trend</td></tr>`;
-
-  html += `<tr style="font-weight:bold;text-align:center;background:#f4f4f1;">
-    <td style="text-align:left;">Category</td>
-    ${months.map(m => `<td>${m}</td>`).join("")}
-  </tr>`;
-
-  bucketOrder.forEach(bucket => {
-    const cats = Object.keys(breakdown).filter(cat =>
-      tableData.buckets.find(b => b.name === bucket && b.categories.find(c => c.name === cat))
-    );
-    if (cats.length === 0) return;
-
-    const color = BUCKET_COLORS[bucket] || "#f8f8f8";
-    html += `<tr><td colspan="${months.length + 1}" style="background:${color};font-weight:bold;font-size:13px;padding:8px;">▶ ${bucket.toUpperCase()}</td></tr>`;
-
-    cats.forEach(cat => {
-      const amts = months.map(m => breakdown[cat]?.[m] ?? 0);
-      html += `<tr>
-        <td style="background:${color};">${escapeHtml(cat)}</td>
-        ${amts.map(a => `<td style="background:${color};text-align:right;">${formatDollar(a)}</td>`).join("")}
-      </tr>`;
+  // Sum all categories within a bucket for each month
+  const datasets = bucketOrder
+    .filter(bucket =>
+      tableData.buckets.find(b => b.name === bucket && b.categories.length > 0)
+    )
+    .map(bucket => {
+      const cats = Object.keys(breakdown).filter(cat =>
+        tableData.buckets.find(b => b.name === bucket && b.categories.find(c => c.name === cat))
+      );
+      const monthlyTotals = months.map(m =>
+        parseFloat(cats.reduce((sum, cat) => sum + (breakdown[cat]?.[m] ?? 0), 0).toFixed(2))
+      );
+      return {
+        label:           bucket,
+        data:            monthlyTotals,
+        borderColor:     TREND_LINE_COLORS[bucket],
+        backgroundColor: TREND_FILL_COLORS[bucket],
+        fill:            true,
+        tension:         0.35,
+        pointRadius:     5,
+        pointHoverRadius: 7,
+        borderWidth:     2.5
+      };
     });
-  });
 
-  html += `</table>`;
-  document.getElementById("trends-container").innerHTML = html;
+  // Replace container contents with a fresh canvas
+  const tc = document.getElementById("trends-container");
+  tc.innerHTML = '<div style="max-width:760px;margin:16px auto 0;"><canvas id="trends-chart"></canvas></div>';
+
+  if (trendsChartInstance) {
+    trendsChartInstance.destroy();
+  }
+
+  trendsChartInstance = new Chart(document.getElementById("trends-chart"), {
+    type: "line",
+    data: { labels: months, datasets },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: {
+          display: true,
+          labels: {
+            font: { family: "DM Sans", size: 13 },
+            usePointStyle: true,
+            padding: 20
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${formatDollar(ctx.parsed.y)}`
+          }
+        },
+        datalabels: { display: false }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          ticks: {
+            font: { family: "DM Sans", size: 12 },
+            callback: val => "$" + val.toLocaleString()
+          },
+          grid: { color: "#ebebeb" }
+        },
+        x: {
+          ticks: { font: { family: "DM Sans", size: 12, weight: "600" } },
+          grid: { display: false }
+        }
+      }
+    }
+  });
 }

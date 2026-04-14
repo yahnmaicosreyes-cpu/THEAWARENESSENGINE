@@ -28,6 +28,7 @@ app.config["MAX_CONTENT_LENGTH"]      = 10 * 1024 * 1024  # 10 MB upload limit
 
 @app.route("/")
 def index():
+    session.clear()
     return render_template("index.html")
 
 
