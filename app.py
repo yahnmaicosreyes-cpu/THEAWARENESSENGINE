@@ -33,7 +33,18 @@ _MONTH_ALIASES = {
 # Matched with startswith so partial labels like "EXPENSES BY D.A." are caught.
 _SKIP_PREFIXES = ("ATM WITHDRAWALS", "EXPENSES")
 
+# Structural header labels that should never be treated as expense categories.
+_STRUCTURAL_HEADERS = frozenset({
+    "INCOME",
+    "TOTAL INCOME BEFORE TAXES",
+    "EXPENSES BY D.A. CATEGORIES",
+    "TOTAL EXPENSES",
+})
+
 _EXCLUDED_COLORS = {"00000000", "FFFFFFFF", "FFF3F3F3"}
+
+# Row labels in the simple template that are structural dividers, not spendable categories.
+_SKIP_WORDS = {"necessities", "luxuries", "future self", "subtotal", "total", "budget template"}
 
 BUCKET_LABELS = ["Necessities", "Luxuries", "Future Self"]
 
@@ -143,8 +154,6 @@ def extract_simple(wb):
     Expects: col A = category name, col B = amount.
     Treats rows containing 'income' as income; skips bucket headers and subtotals."""
     ws = wb.active
-    _SKIP_WORDS = {"necessities", "luxuries", "future self", "subtotal", "total", "budget template"}
-
     income = 0.0
     categories = {}
     ordered_cats = []
@@ -313,8 +322,7 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
             # Exclude structural headers
             if any(label_upper.startswith(p) for p in _SKIP_PREFIXES):
                 continue
-            if label_upper in ("INCOME", "TOTAL INCOME BEFORE TAXES",
-                               "EXPENSES BY D.A. CATEGORIES", "TOTAL EXPENSES"):
+            if label_upper in _STRUCTURAL_HEADERS:
                 continue
             bold_colored_expense_rows.add(row_idx)
 
@@ -338,8 +346,7 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
             # Skip structural/header rows always
             if any(label_upper.startswith(p) for p in _SKIP_PREFIXES):
                 continue
-            if label_upper in ("INCOME", "TOTAL INCOME BEFORE TAXES",
-                               "EXPENSES BY D.A. CATEGORIES", "TOTAL EXPENSES"):
+            if label_upper in _STRUCTURAL_HEADERS:
                 continue
 
             # ── Income rows — always collected individually ────────────────
@@ -575,88 +582,13 @@ def compute_totals(monthly_data, selected_months=None):
     return {k: round(sum(monthly_data[m].get(k, 0) for m in active_months), 2) for k in keys}
 
 
-def build_output_xlsx(averages, assignments, totals=None):
-    """
-    Build the clean 3-bucket output spreadsheet.
-    assignments = { category_name: bucket_label, ... }
-    totals = { category_name: raw_sum_across_months, ... }
-    """
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Awareness Engine"
-
-    # ── Styles ────────────────────────────────────────────────────────────────
-    bucket_font   = Font(name="Arial", bold=True, size=12)
-    label_font    = Font(name="Arial", size=11)
-    pct_font      = Font(name="Arial", bold=True, size=12)
-    total_font    = Font(name="Arial", bold=True, size=11)
-
-    nec_fill  = PatternFill("solid", start_color="D6EAF8")   # light blue
-    lux_fill  = PatternFill("solid", start_color="D5F5E3")   # light green
-    fs_fill   = PatternFill("solid", start_color="FEF9E7")   # light yellow
-    title_fill = PatternFill("solid", start_color="2C3E50")
-    title_font = Font(name="Arial", bold=True, size=14, color="FFFFFF")
-
-    center = Alignment(horizontal="center", vertical="center")
-    left   = Alignment(horizontal="left",   vertical="center")
-    right  = Alignment(horizontal="right",  vertical="center")
-
-    thin = Side(style="thin", color="AAAAAA")
-    border = Border(top=thin, left=thin, right=thin, bottom=thin)
-
-    def style(cell, font=None, fill=None, align=None, num_fmt=None):
-        if font:   cell.font      = font
-        if fill:   cell.fill      = fill
-        if align:  cell.alignment = align
-        if num_fmt: cell.number_format = num_fmt
-        cell.border = border
-
-    totals = totals or {}
-
-    # ── Column widths ─────────────────────────────────────────────────────────
-    ws.column_dimensions["A"].width = 30
-    ws.column_dimensions["B"].width = 22  # Total Spending (all months)
-    ws.column_dimensions["C"].width = 20  # Avg Monthly Spending
-    ws.column_dimensions["D"].width = 14  # % of Income / % of Spending
-    ws.column_dimensions["E"].width = 14  # % of Income (Grand Reveal)
-
-    # ── Title row ─────────────────────────────────────────────────────────────
-    ws.merge_cells("A1:E1")
-    ws["A1"] = "THE AWARENESS ENGINE — My Financial Reality"
-    style(ws["A1"], font=title_font, fill=title_fill, align=center)
-    ws.row_dimensions[1].height = 30
-
-    # ── Income row ────────────────────────────────────────────────────────────
-    ws.row_dimensions[2].height = 6   # spacer
-    ws["A3"] = "Total Income"
-    ws["B3"] = averages.get("income", 0)
-    ws["E3"] = "100%"
-    style(ws["A3"], font=total_font, align=left)
-    style(ws["B3"], font=total_font, align=right, num_fmt='"$"#,##0.00')
-    style(ws["C3"], font=total_font, align=right)
-    style(ws["D3"], font=total_font, align=right)
-    style(ws["E3"], font=pct_font,   align=center)
-    ws.row_dimensions[3].height = 22
-
-    ws.row_dimensions[4].height = 8   # spacer
-
-    # ── Bucket colours map ────────────────────────────────────────────────────
-    bucket_fill = {
-        "Necessities":  nec_fill,
-        "Luxuries":     lux_fill,
-        "Future Self":  fs_fill,
-    }
-
-    # ── Group categories by bucket ────────────────────────────────────────────
-    buckets = {b: [] for b in BUCKET_LABELS}
-    for cat, bucket in assignments.items():
-        if bucket in buckets:
-            buckets[bucket].append(cat)
-
-    income = averages.get("income", 0)   # guard division with 'if income' checks below
-    total_fill = PatternFill("solid", start_color="2C3E50")
+def _render_bucket_sections(ws, averages, assignments, totals, buckets, income,
+                             style_fn, bucket_fill, label_font, bucket_font,
+                             center, right, left, border, start_row):
+    """Render all three bucket sections into ws. Returns the next available row."""
+    total_fill  = PatternFill("solid", start_color="2C3E50")
     total_white = Font(name="Arial", bold=True, size=11, color="FFFFFF")
-    current_row = 5
+    current_row = start_row
 
     for bucket_name in BUCKET_LABELS:
         cats = buckets[bucket_name]
@@ -665,7 +597,7 @@ def build_output_xlsx(averages, assignments, totals=None):
         # Bucket header
         ws.merge_cells(f"A{current_row}:D{current_row}")
         ws[f"A{current_row}"] = f"▶  {bucket_name.upper()}"
-        style(ws[f"A{current_row}"], font=bucket_font, fill=fill, align=left)
+        style_fn(ws[f"A{current_row}"], font=bucket_font, fill=fill, align=left)
         ws.row_dimensions[current_row].height = 24
         current_row += 1
 
@@ -675,12 +607,12 @@ def build_output_xlsx(averages, assignments, totals=None):
         ws[f"C{current_row}"] = "Avg Monthly Spending"
         ws[f"D{current_row}"] = "% of Income"
         for col in ["A", "B", "C", "D"]:
-            style(ws[f"{col}{current_row}"], font=Font(name="Arial", bold=True, size=10),
-                  fill=fill, align=center)
+            style_fn(ws[f"{col}{current_row}"], font=Font(name="Arial", bold=True, size=10),
+                     fill=fill, align=center)
         ws.row_dimensions[current_row].height = 18
         current_row += 1
 
-        # Category rows — track which rows hold the $ amounts for SUM formula
+        # Category rows
         data_start = current_row
         if not cats:
             ws[f"A{current_row}"] = "(No categories assigned)"
@@ -688,7 +620,7 @@ def build_output_xlsx(averages, assignments, totals=None):
             ws[f"C{current_row}"] = 0
             ws[f"D{current_row}"] = "0.0%"
             for col in ["A", "B", "C", "D"]:
-                style(ws[f"{col}{current_row}"], font=label_font, fill=fill, align=left)
+                style_fn(ws[f"{col}{current_row}"], font=label_font, fill=fill, align=left)
             current_row += 1
         else:
             for cat in cats:
@@ -699,12 +631,12 @@ def build_output_xlsx(averages, assignments, totals=None):
                 ws[f"B{current_row}"] = raw
                 ws[f"C{current_row}"] = amt
                 ws[f"D{current_row}"] = f"{pct:.1f}%"
-                style(ws[f"A{current_row}"], font=label_font, fill=fill, align=left)
-                style(ws[f"B{current_row}"], font=label_font, fill=fill,
-                      align=right, num_fmt='"$"#,##0.00')
-                style(ws[f"C{current_row}"], font=label_font, fill=fill,
-                      align=right, num_fmt='"$"#,##0.00')
-                style(ws[f"D{current_row}"], font=label_font, fill=fill, align=center)
+                style_fn(ws[f"A{current_row}"], font=label_font, fill=fill, align=left)
+                style_fn(ws[f"B{current_row}"], font=label_font, fill=fill,
+                         align=right, num_fmt='"$"#,##0.00')
+                style_fn(ws[f"C{current_row}"], font=label_font, fill=fill,
+                         align=right, num_fmt='"$"#,##0.00')
+                style_fn(ws[f"D{current_row}"], font=label_font, fill=fill, align=center)
                 ws.row_dimensions[current_row].height = 20
                 current_row += 1
 
@@ -718,38 +650,48 @@ def build_output_xlsx(averages, assignments, totals=None):
         ws[f"C{current_row}"] = f"=SUM(C{data_start}:C{data_end})"
         ws[f"D{current_row}"] = f"{bucket_pct:.1f}%"
         for col in ["A", "B", "C", "D"]:
-            style(ws[f"{col}{current_row}"], font=total_white, fill=total_fill, align=center)
+            style_fn(ws[f"{col}{current_row}"], font=total_white, fill=total_fill, align=center)
         ws[f"B{current_row}"].number_format = '"$"#,##0.00'
         ws[f"C{current_row}"].number_format = '"$"#,##0.00'
         ws.row_dimensions[current_row].height = 22
         current_row += 2   # spacer after each bucket
 
-    # ── Grand summary rows ────────────────────────────────────────────────────
-    current_row += 1
+    return current_row
+
+
+def _render_grand_reveal(ws, averages, assignments, totals, buckets, income,
+                          style_fn, center, right, border, start_row):
+    """Render the Grand Reveal summary section into ws."""
+    current_row = start_row + 1   # one spacer before the header
+
+    reveal_fill  = PatternFill("solid", start_color="1A5276")
+    dark_fill    = PatternFill("solid", start_color="2C3E50")
+    white_bold   = Font(name="Arial", bold=True, size=11, color="FFFFFF")
+
+    # Grand Reveal header
     ws.merge_cells(f"A{current_row}:E{current_row}")
     ws[f"A{current_row}"] = "─── GRAND REVEAL ───"
-    style(ws[f"A{current_row}"], font=Font(name="Arial", bold=True, size=12,
-          color="FFFFFF"), fill=PatternFill("solid", start_color="1A5276"), align=center)
+    style_fn(ws[f"A{current_row}"], font=Font(name="Arial", bold=True, size=12, color="FFFFFF"),
+             fill=reveal_fill, align=center)
     ws.row_dimensions[current_row].height = 24
     current_row += 1
 
-    # Grand Reveal column headers
-    reveal_fill = PatternFill("solid", start_color="1A5276")
+    # Column headers
     for col, label in [("A", "Bucket"), ("B", "Total Spending (all months)"),
                         ("C", "Avg Monthly Spending"), ("D", "% of Spending"), ("E", "% of Income")]:
         ws[f"{col}{current_row}"] = label
-        style(ws[f"{col}{current_row}"], fill=reveal_fill, align=center)
+        style_fn(ws[f"{col}{current_row}"], fill=reveal_fill, align=center)
         ws[f"{col}{current_row}"].font = Font(name="Arial", bold=True, size=10, color="FFFFFF")
     ws.row_dimensions[current_row].height = 18
     current_row += 1
 
-    left_out = {cat for cat, b in assignments.items() if b == "Leave Out"}
-    all_spent = sum(v for k, v in averages.items() if k != "income" and k not in left_out)
+    left_out      = {cat for cat, b in assignments.items() if b == "Leave Out"}
+    all_spent     = sum(v for k, v in averages.items() if k != "income" and k not in left_out)
     all_raw_spent = sum(totals.get(k, 0) for k in averages if k != "income" and k not in left_out)
 
     for bucket_name in BUCKET_LABELS:
         cats = buckets[bucket_name]
-        bucket_total = sum(averages.get(c, 0) for c in cats)
+        bucket_total     = sum(averages.get(c, 0) for c in cats)
         bucket_raw_total = sum(totals.get(c, 0) for c in cats)
         pct_spending = (bucket_total / all_spent) * 100 if all_spent else 0
         pct_income   = (bucket_raw_total / income) * 100 if income    else 0
@@ -759,23 +701,21 @@ def build_output_xlsx(averages, assignments, totals=None):
         ws[f"D{current_row}"] = f"{pct_spending:.1f}%"
         ws[f"E{current_row}"] = f"{pct_income:.1f}%"
         for col in ["A", "B", "C", "D", "E"]:
-            style(ws[f"{col}{current_row}"],
-                  font=Font(name="Arial", bold=True, size=11), align=center)
+            style_fn(ws[f"{col}{current_row}"],
+                     font=Font(name="Arial", bold=True, size=11), align=center)
         ws[f"B{current_row}"].number_format = '"$"#,##0.00'
         ws[f"C{current_row}"].number_format = '"$"#,##0.00'
         ws.row_dimensions[current_row].height = 22
         current_row += 1
 
-    # Total spending summary row
-    dark_fill = PatternFill("solid", start_color="2C3E50")
-    white_bold = Font(name="Arial", bold=True, size=11, color="FFFFFF")
+    # Total spending row
     ws[f"A{current_row}"] = "TOTAL SPENDING"
     ws[f"B{current_row}"] = all_raw_spent
     ws[f"C{current_row}"] = all_spent
     ws[f"D{current_row}"] = "100.0%"
     ws[f"E{current_row}"] = f"{(all_spent / income * 100):.1f}%" if income else "0.0%"
     for col in ["A", "B", "C", "D", "E"]:
-        style(ws[f"{col}{current_row}"], font=white_bold, fill=dark_fill, align=center)
+        style_fn(ws[f"{col}{current_row}"], font=white_bold, fill=dark_fill, align=center)
     ws[f"B{current_row}"].number_format = '"$"#,##0.00'
     ws[f"C{current_row}"].number_format = '"$"#,##0.00'
     ws.row_dimensions[current_row].height = 22
@@ -795,12 +735,98 @@ def build_output_xlsx(averages, assignments, totals=None):
     ws[f"D{current_row}"] = "—"
     ws[f"E{current_row}"] = "—"
     for col in ["A", "B", "C", "D", "E"]:
-        ws[f"{col}{current_row}"].fill = rem_fill
-        ws[f"{col}{current_row}"].font = rem_font
+        ws[f"{col}{current_row}"].fill      = rem_fill
+        ws[f"{col}{current_row}"].font      = rem_font
         ws[f"{col}{current_row}"].alignment = center
-        ws[f"{col}{current_row}"].border = border
+        ws[f"{col}{current_row}"].border    = border
     ws[f"B{current_row}"].number_format = '"$"#,##0.00'
     ws.row_dimensions[current_row].height = 22
+
+
+def build_output_xlsx(averages, assignments, totals=None):
+    """
+    Build the clean 3-bucket output spreadsheet.
+    assignments = { category_name: bucket_label, ... }
+    totals = { category_name: raw_sum_across_months, ... }
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Awareness Engine"
+    totals = totals or {}
+
+    # ── Styles ────────────────────────────────────────────────────────────────
+    bucket_font = Font(name="Arial", bold=True, size=12)
+    label_font  = Font(name="Arial", size=11)
+    pct_font    = Font(name="Arial", bold=True, size=12)
+    total_font  = Font(name="Arial", bold=True, size=11)
+    title_fill  = PatternFill("solid", start_color="2C3E50")
+    title_font  = Font(name="Arial", bold=True, size=14, color="FFFFFF")
+
+    center = Alignment(horizontal="center", vertical="center")
+    left   = Alignment(horizontal="left",   vertical="center")
+    right  = Alignment(horizontal="right",  vertical="center")
+
+    thin   = Side(style="thin", color="AAAAAA")
+    border = Border(top=thin, left=thin, right=thin, bottom=thin)
+
+    def style(cell, font=None, fill=None, align=None, num_fmt=None):
+        if font:    cell.font      = font
+        if fill:    cell.fill      = fill
+        if align:   cell.alignment = align
+        if num_fmt: cell.number_format = num_fmt
+        cell.border = border
+
+    bucket_fill = {
+        "Necessities": PatternFill("solid", start_color="D6EAF8"),
+        "Luxuries":    PatternFill("solid", start_color="D5F5E3"),
+        "Future Self": PatternFill("solid", start_color="FEF9E7"),
+    }
+
+    # ── Column widths ─────────────────────────────────────────────────────────
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 20
+    ws.column_dimensions["D"].width = 14
+    ws.column_dimensions["E"].width = 14
+
+    # ── Title row ─────────────────────────────────────────────────────────────
+    ws.merge_cells("A1:E1")
+    ws["A1"] = "THE AWARENESS ENGINE — My Financial Reality"
+    style(ws["A1"], font=title_font, fill=title_fill, align=center)
+    ws.row_dimensions[1].height = 30
+
+    # ── Income row ────────────────────────────────────────────────────────────
+    ws.row_dimensions[2].height = 6   # spacer
+    income = averages.get("income", 0)
+    ws["A3"] = "Total Income"
+    ws["B3"] = income
+    ws["E3"] = "100%"
+    style(ws["A3"], font=total_font, align=left)
+    style(ws["B3"], font=total_font, align=right, num_fmt='"$"#,##0.00')
+    style(ws["C3"], font=total_font, align=right)
+    style(ws["D3"], font=total_font, align=right)
+    style(ws["E3"], font=pct_font,   align=center)
+    ws.row_dimensions[3].height = 22
+    ws.row_dimensions[4].height = 8   # spacer
+
+    # ── Group categories by bucket ────────────────────────────────────────────
+    buckets = {b: [] for b in BUCKET_LABELS}
+    for cat, bucket in assignments.items():
+        if bucket in buckets:
+            buckets[bucket].append(cat)
+
+    # ── Bucket sections ───────────────────────────────────────────────────────
+    next_row = _render_bucket_sections(
+        ws, averages, assignments, totals, buckets, income,
+        style, bucket_fill, label_font, bucket_font, center, right, left, border,
+        start_row=5
+    )
+
+    # ── Grand Reveal ──────────────────────────────────────────────────────────
+    _render_grand_reveal(
+        ws, averages, assignments, totals, buckets, income,
+        style, center, right, border, start_row=next_row
+    )
 
     # ── Save to temp file ─────────────────────────────────────────────────────
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
@@ -856,6 +882,28 @@ def build_table_data(averages, assignments, totals=None):
         "total_raw_spending": all_raw_spent,
         "remaining_income": remaining_income,
         "total_pct_income": round((all_raw_spent / income * 100), 1) if income else 0.0
+    }
+
+
+def _make_budget_template_styles():
+    """Return shared styles used by both single-month and 3-month budget template builders."""
+    thin = Side(style="thin", color="CCCCCC")
+    return {
+        "header_font": Font(name="Calibri", bold=True, size=13, color="FFFFFF"),
+        "bucket_fonts": {
+            "Necessities":  Font(name="Calibri", bold=True, size=12, color="1A6380"),
+            "Luxuries":     Font(name="Calibri", bold=True, size=12, color="2E7D52"),
+            "Future Self":  Font(name="Calibri", bold=True, size=12, color="A0522D"),
+        },
+        "bucket_fills": {
+            "Necessities":  PatternFill("solid", fgColor="DBF0F7"),
+            "Luxuries":     PatternFill("solid", fgColor="DAF2E5"),
+            "Future Self":  PatternFill("solid", fgColor="FEF0E0"),
+        },
+        "header_fill":  PatternFill("solid", fgColor="0F1F3D"),
+        "border":       Border(left=thin, right=thin, top=thin, bottom=thin),
+        "center":       Alignment(horizontal="center", vertical="center"),
+        "right_align":  Alignment(horizontal="right",  vertical="center"),
     }
 
 
@@ -1002,22 +1050,14 @@ def template_download():
     ws = wb.active
     ws.title = "Budget Template"
 
-    header_font = Font(name="Calibri", bold=True, size=13, color="FFFFFF")
-    bucket_fonts = {
-        "Necessities":  Font(name="Calibri", bold=True, size=12, color="1A6380"),
-        "Luxuries":     Font(name="Calibri", bold=True, size=12, color="2E7D52"),
-        "Future Self":  Font(name="Calibri", bold=True, size=12, color="A0522D"),
-    }
-    bucket_fills = {
-        "Necessities":  PatternFill("solid", fgColor="DBF0F7"),
-        "Luxuries":     PatternFill("solid", fgColor="DAF2E5"),
-        "Future Self":  PatternFill("solid", fgColor="FEF0E0"),
-    }
-    header_fill = PatternFill("solid", fgColor="0F1F3D")
-    thin = Side(style="thin", color="CCCCCC")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    center = Alignment(horizontal="center", vertical="center")
-    right_align = Alignment(horizontal="right", vertical="center")
+    st = _make_budget_template_styles()
+    header_font  = st["header_font"]
+    bucket_fonts = st["bucket_fonts"]
+    bucket_fills = st["bucket_fills"]
+    header_fill  = st["header_fill"]
+    border       = st["border"]
+    center       = st["center"]
+    right_align  = st["right_align"]
 
     # Header row
     ws.merge_cells("A1:B1")
@@ -1189,22 +1229,14 @@ def three_month_download():
     ws = wb.active
     ws.title = "Budget Template"
 
-    header_font = Font(name="Calibri", bold=True, size=13, color="FFFFFF")
-    bucket_fonts = {
-        "Necessities":  Font(name="Calibri", bold=True, size=12, color="1A6380"),
-        "Luxuries":     Font(name="Calibri", bold=True, size=12, color="2E7D52"),
-        "Future Self":  Font(name="Calibri", bold=True, size=12, color="A0522D"),
-    }
-    bucket_fills = {
-        "Necessities":  PatternFill("solid", fgColor="DBF0F7"),
-        "Luxuries":     PatternFill("solid", fgColor="DAF2E5"),
-        "Future Self":  PatternFill("solid", fgColor="FEF0E0"),
-    }
-    header_fill  = PatternFill("solid", fgColor="0F1F3D")
-    thin         = Side(style="thin", color="CCCCCC")
-    border       = Border(left=thin, right=thin, top=thin, bottom=thin)
-    center       = Alignment(horizontal="center", vertical="center")
-    right_align  = Alignment(horizontal="right",  vertical="center")
+    st = _make_budget_template_styles()
+    header_font  = st["header_font"]
+    bucket_fonts = st["bucket_fonts"]
+    bucket_fills = st["bucket_fills"]
+    header_fill  = st["header_fill"]
+    border       = st["border"]
+    center       = st["center"]
+    right_align  = st["right_align"]
 
     # Title
     ws.merge_cells("A1:B1")

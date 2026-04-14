@@ -1096,58 +1096,53 @@
       .replace(/"/g, "&quot;");
   }
 
-  function renderTable(data) {
-    tableData = data;
-    const income = data.income;
-    let html = `<table class="preview-table">`;
+  function _renderBucketSection(bucket, income) {
+    const color = BUCKET_COLORS[bucket.name] || "#f8f8f8";
+    let html = "";
 
-    html += `<tr><td colspan="5" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">THE AWARENESS ENGINE — My Financial Reality</td></tr>`;
-    html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
+    html += `<tr><td colspan="5" style="background:${color};font-weight:bold;font-size:13px;padding:10px;">▶ ${escapeHtml(bucket.name.toUpperCase())}</td></tr>`;
+    html += `<tr style="font-size:11px;font-weight:bold;text-align:center;">
+      <td style="background:${color};">Category</td>
+      <td style="background:${color};">Total Spending (all months)</td>
+      <td style="background:${color};">Avg Monthly Spending</td>
+      <td style="background:${color};">% of Income</td>
+      <td style="background:${color};"></td>
+    </tr>`;
+
+    if (bucket.categories.length === 0) {
+      html += `<tr><td colspan="4" style="background:${color};color:#888;">(No categories assigned)</td><td style="background:${color};"></td></tr>`;
+    } else {
+      bucket.categories.forEach(cat => {
+        const pct = income ? ((cat.raw_total / income) * 100).toFixed(1) : "0.0";
+        html += `<tr class="cat-data-row" data-bucket="${escapeHtml(bucket.name)}">
+          <td class="editable" contenteditable="true" style="background:${color};" data-field="name">${escapeHtml(cat.name)}</td>
+          <td style="background:${color};text-align:right;" data-field="raw_total">${formatDollar(cat.raw_total)}</td>
+          <td class="editable" contenteditable="true" style="background:${color};text-align:right;" data-field="amt" data-raw="${cat.amt}">${formatDollar(cat.amt)}</td>
+          <td class="cat-pct" style="background:${color};text-align:center;">${pct}%</td>
+          <td style="background:${color};"><div class="slider-wrap"><span class="slider-bubble hidden"></span><input type="range" class="whatif-slider" min="0" max="${cat.amt * 2 || 1000}" step="1" value="${cat.amt}" data-original="${cat.amt}"><button class="whatif-reset-btn hidden" onclick="resetSlider(this)" title="Reset to original">↺</button></div></td>
+        </tr>`;
+      });
+    }
+
     html += `<tr>
-      <td style="font-weight:bold;">Total Income</td>
-      <td style="font-weight:bold;text-align:right;">${formatDollar(income)}</td>
-      <td></td>
-      <td></td>
-      <td style="font-weight:bold;text-align:center;">100%</td>
+      <td style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">TOTAL — ${escapeHtml(bucket.name)}</td>
+      <td style="background:#2c3e50;color:white;font-weight:bold;text-align:right;">${formatDollar(bucket.raw_total)}</td>
+      <td style="background:#2c3e50;color:white;font-weight:bold;text-align:right;">${formatDollar(bucket.total)}</td>
+      <td style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">${bucket.pct_income.toFixed(1)}%</td>
+      <td style="background:#2c3e50;color:white;"></td>
     </tr>`;
     html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
 
-    data.buckets.forEach(bucket => {
-      const color = BUCKET_COLORS[bucket.name] || "#f8f8f8";
-      html += `<tr><td colspan="5" style="background:${color};font-weight:bold;font-size:13px;padding:10px;">▶ ${escapeHtml(bucket.name.toUpperCase())}</td></tr>`;
-      html += `<tr style="font-size:11px;font-weight:bold;text-align:center;">
-        <td style="background:${color};">Category</td>
-        <td style="background:${color};">Total Spending (all months)</td>
-        <td style="background:${color};">Avg Monthly Spending</td>
-        <td style="background:${color};">% of Income</td>
-        <td style="background:${color};"></td>
-      </tr>`;
+    return html;
+  }
 
-      if (bucket.categories.length === 0) {
-        html += `<tr><td colspan="4" style="background:${color};color:#888;">(No categories assigned)</td><td style="background:${color};"></td></tr>`;
-      } else {
-        bucket.categories.forEach(cat => {
-          const pct = income ? ((cat.raw_total / income) * 100).toFixed(1) : "0.0";
-          html += `<tr class="cat-data-row" data-bucket="${escapeHtml(bucket.name)}">
-            <td class="editable" contenteditable="true" style="background:${color};" data-field="name">${escapeHtml(cat.name)}</td>
-            <td style="background:${color};text-align:right;" data-field="raw_total">${formatDollar(cat.raw_total)}</td>
-            <td class="editable" contenteditable="true" style="background:${color};text-align:right;" data-field="amt" data-raw="${cat.amt}">${formatDollar(cat.amt)}</td>
-            <td class="cat-pct" style="background:${color};text-align:center;">${pct}%</td>
-            <td style="background:${color};"><div class="slider-wrap"><span class="slider-bubble hidden"></span><input type="range" class="whatif-slider" min="0" max="${cat.amt * 2 || 1000}" step="1" value="${cat.amt}" data-original="${cat.amt}"><button class="whatif-reset-btn hidden" onclick="resetSlider(this)" title="Reset to original">↺</button></div></td>
-          </tr>`;
-        });
-      }
+  function _renderGrandReveal(data) {
+    const remaining    = data.remaining_income;
+    const remainingPct = data.income > 0 ? ((remaining / data.income) * 100).toFixed(1) : "0.0";
+    const remColor     = remaining < 0 ? "#c0392b" : "#145a32";
+    const remBg        = remaining < 0 ? "#FDECEA"  : "#D5F5E3";
 
-      html += `<tr>
-        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">TOTAL — ${escapeHtml(bucket.name)}</td>
-        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:right;">${formatDollar(bucket.raw_total)}</td>
-        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:right;">${formatDollar(bucket.total)}</td>
-        <td style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">${bucket.pct_income.toFixed(1)}%</td>
-        <td style="background:#2c3e50;color:white;"></td>
-      </tr>`;
-      html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
-    });
-
+    let html = "";
     html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
     html += `<tr><td colspan="5" style="background:#1a5276;color:white;font-weight:bold;font-size:13px;text-align:center;padding:10px;">─── GRAND REVEAL ───</td></tr>`;
     html += `<tr style="background:#1a5276;color:white;font-size:11px;font-weight:bold;text-align:center;">
@@ -1169,10 +1164,6 @@
       <td>100.0%</td>
       <td>${data.total_pct_income.toFixed(1)}%</td>
     </tr>`;
-    const remaining = data.remaining_income;
-    const remainingPct = data.income > 0 ? ((remaining / data.income) * 100).toFixed(1) : "0.0";
-    const remColor = remaining < 0 ? "#c0392b" : "#145a32";
-    const remBg   = remaining < 0 ? "#FDECEA"  : "#D5F5E3";
     html += `<tr style="background:${remBg};color:${remColor};font-weight:bold;text-align:center;">
       <td>💰 Remaining Income</td>
       <td>${formatDollar(remaining)}</td>
@@ -1180,6 +1171,36 @@
       <td>—</td>
       <td>${remainingPct}%</td>
     </tr>`;
+
+    return html;
+  }
+
+  function renderTable(data) {
+    tableData = data;
+    const income = data.income;
+
+    let html = `<table class="preview-table">`;
+
+    // Title and income header
+    html += `<tr><td colspan="5" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">THE AWARENESS ENGINE — My Financial Reality</td></tr>`;
+    html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
+    html += `<tr>
+      <td style="font-weight:bold;">Total Income</td>
+      <td style="font-weight:bold;text-align:right;">${formatDollar(income)}</td>
+      <td></td>
+      <td></td>
+      <td style="font-weight:bold;text-align:center;">100%</td>
+    </tr>`;
+    html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
+
+    // Bucket sections
+    data.buckets.forEach(bucket => {
+      html += _renderBucketSection(bucket, income);
+    });
+
+    // Grand Reveal
+    html += _renderGrandReveal(data);
+
     html += `</table>`;
 
     document.getElementById("table-container").innerHTML = html;
@@ -1295,87 +1316,101 @@
     }
   }
 
+  // nMonths scales avg→total so % of Income stays on the same dimensional basis as total income.
+  function _getNMonths() {
+    return (tableData.total_spending > 0)
+      ? tableData.total_raw_spending / tableData.total_spending : 1;
+  }
+
+  function _pctOfIncome(avg, income) {
+    const nMonths = _getNMonths();
+    return income ? ((avg * nMonths / income) * 100).toFixed(1) : "0.0";
+  }
+
+  function _updateBucketTotalRow(bucket, income) {
+    // Sum avg amounts for all category rows in this bucket
+    let bucketTotal = 0;
+    document.querySelectorAll(`.cat-data-row[data-bucket="${bucket}"]`).forEach(r => {
+      bucketTotal += parseFloat(r.querySelector("[data-field='amt']").dataset.raw) || 0;
+    });
+
+    // Find the TOTAL row for this bucket and update avg and % of income columns
+    // Columns: [0]=label [1]=raw_total(unchanged) [2]=avg [3]=pct_income [4]=slider
+    const totalLabel = `TOTAL — ${bucket}`;
+    document.querySelectorAll(".preview-table tr").forEach(r => {
+      const firstTd = r.querySelector("td");
+      if (firstTd && firstTd.textContent.trim() === totalLabel) {
+        const cells = r.querySelectorAll("td");
+        cells[2].textContent = formatDollar(bucketTotal);
+        cells[3].textContent = _pctOfIncome(bucketTotal, income) + "%";
+      }
+    });
+
+    return bucketTotal;
+  }
+
+  function _updateGrandRevealRows(income) {
+    // Tally avg spend per bucket across all category rows
+    const allBuckets = {};
+    document.querySelectorAll(".preview-table .cat-data-row").forEach(r => {
+      const b = r.dataset.bucket;
+      if (!allBuckets[b]) allBuckets[b] = 0;
+      allBuckets[b] += parseFloat(r.querySelector("[data-field='amt']").dataset.raw) || 0;
+    });
+    const totalSpending = Object.values(allBuckets).reduce((a, b) => a + b, 0);
+
+    // Grand Reveal columns: [0]=bucket [1]=raw_total(unchanged) [2]=avg [3]=%spending [4]=%income
+    // TOTAL SPENDING:       [0]=label  [1]=raw_total(unchanged) [2]=avg [3]=100%      [4]=%income
+    document.querySelectorAll(".preview-table tr").forEach(r => {
+      const firstTd = r.querySelector("td");
+      if (!firstTd) return;
+      const label = firstTd.textContent.trim();
+
+      Object.keys(allBuckets).forEach(b => {
+        if (label === b.toUpperCase()) {
+          const cells = r.querySelectorAll("td");
+          cells[2].textContent = formatDollar(allBuckets[b]);
+          cells[3].textContent = totalSpending
+            ? ((allBuckets[b] / totalSpending) * 100).toFixed(1) + "%" : "0.0%";
+          cells[4].textContent = _pctOfIncome(allBuckets[b], income) + "%";
+        }
+      });
+
+      if (label === "TOTAL SPENDING") {
+        const cells = r.querySelectorAll("td");
+        cells[2].textContent = formatDollar(totalSpending);
+        cells[4].textContent = _pctOfIncome(totalSpending, income) + "%";
+      }
+    });
+  }
+
+  function _updateBubble(slider, pct) {
+    const bubble = slider.closest(".slider-wrap")?.querySelector(".slider-bubble");
+    if (!bubble) return;
+    // Offset formula keeps the bubble tooltip centered over the thumb across the slider range
+    const THUMB_HALF_WIDTH = 8;
+    const pos = (slider.value - slider.min) / (slider.max - slider.min);
+    bubble.style.left = `calc(${pos * 100}% + ${THUMB_HALF_WIDTH - pos * (THUMB_HALF_WIDTH * 2)}px)`;
+    bubble.textContent = pct + "%";
+  }
+
   function attachSliderListeners() {
     document.querySelectorAll(".preview-table .whatif-slider").forEach(slider => {
       slider.addEventListener("input", function () {
-        const val = parseFloat(this.value);
-        const row = this.closest(".cat-data-row");
+        const val    = parseFloat(this.value);
+        const row    = this.closest(".cat-data-row");
         const amtCell = row.querySelector("[data-field='amt']");
-        amtCell.dataset.raw = val;
-
-        // Update displayed amount
-        amtCell.textContent = formatDollar(val);
-
-        // nMonths: used to scale avg→total so % of Income stays on the same
-        // scale as total income (avoids avg/total dimensional mismatch).
         const income  = tableData.income;
-        const nMonths = (tableData.total_spending > 0)
-          ? tableData.total_raw_spending / tableData.total_spending : 1;
-        const pctOfIncome = (avg, inc) => inc ? ((avg * nMonths / inc) * 100).toFixed(1) : "0.0";
 
-        // Update % of income in this row
-        const pct = pctOfIncome(val, income);
+        amtCell.dataset.raw  = val;
+        amtCell.textContent  = formatDollar(val);
+
+        const pct = _pctOfIncome(val, income);
         row.querySelector(".cat-pct").textContent = pct + "%";
 
-        // Recalculate bucket total row
-        const bucket = row.dataset.bucket;
-        let bucketTotal = 0;
-        document.querySelectorAll(`.cat-data-row[data-bucket="${bucket}"]`).forEach(r => {
-          bucketTotal += parseFloat(r.querySelector("[data-field='amt']").dataset.raw) || 0;
-        });
-
-        // Find and update the TOTAL row for this bucket
-        // Columns: [0]=label [1]=raw_total(unchanged) [2]=avg [3]=pct_income [4]=slider
-        const allRows = Array.from(document.querySelectorAll(".preview-table tr"));
-        const totalLabel = `TOTAL — ${bucket}`;
-        allRows.forEach(r => {
-          const firstTd = r.querySelector("td");
-          if (firstTd && firstTd.textContent.trim() === totalLabel) {
-            const cells = r.querySelectorAll("td");
-            cells[2].textContent = formatDollar(bucketTotal);
-            cells[3].textContent = pctOfIncome(bucketTotal, income) + "%";
-          }
-        });
-
-        // Recalculate grand reveal
-        // Grand Reveal columns: [0]=bucket [1]=raw_total(unchanged) [2]=avg [3]=%spending [4]=%income
-        const allBuckets = {};
-        document.querySelectorAll(".preview-table .cat-data-row").forEach(r => {
-          const b = r.dataset.bucket;
-          if (!allBuckets[b]) allBuckets[b] = 0;
-          allBuckets[b] += parseFloat(r.querySelector("[data-field='amt']").dataset.raw) || 0;
-        });
-        const totalSpending = Object.values(allBuckets).reduce((a, b) => a + b, 0);
-
-        allRows.forEach(r => {
-          const firstTd = r.querySelector("td");
-          if (!firstTd) return;
-          const label = firstTd.textContent.trim();
-
-          Object.keys(allBuckets).forEach(b => {
-            if (label === b.toUpperCase()) {
-              const cells = r.querySelectorAll("td");
-              cells[2].textContent = formatDollar(allBuckets[b]);
-              cells[3].textContent = totalSpending ? ((allBuckets[b] / totalSpending) * 100).toFixed(1) + "%" : "0.0%";
-              cells[4].textContent = pctOfIncome(allBuckets[b], income) + "%";
-            }
-          });
-
-          // TOTAL SPENDING: [0]=label [1]=raw_total(unchanged) [2]=avg [3]=100% [4]=%income
-          if (label === "TOTAL SPENDING") {
-            const cells = r.querySelectorAll("td");
-            cells[2].textContent = formatDollar(totalSpending);
-            cells[4].textContent = pctOfIncome(totalSpending, income) + "%";
-          }
-        });
-
-        // Update bubble position and content
-        const bubble = this.closest(".slider-wrap")?.querySelector(".slider-bubble");
-        if (bubble) {
-          const pos = (this.value - this.min) / (this.max - this.min);
-          bubble.style.left = `calc(${pos * 100}% + ${8 - pos * 16}px)`;
-          bubble.textContent = pct + "%";
-        }
+        _updateBucketTotalRow(row.dataset.bucket, income);
+        _updateGrandRevealRows(income);
+        _updateBubble(this, pct);
 
         // Show/hide per-slider reset button
         const resetBtn = this.closest("td").querySelector(".whatif-reset-btn");
@@ -1390,12 +1425,8 @@
         const bubble = this.closest(".slider-wrap")?.querySelector(".slider-bubble");
         if (bubble) {
           const income = tableData ? tableData.income : 0;
-          const nMonths = (tableData && tableData.total_spending > 0)
-            ? tableData.total_raw_spending / tableData.total_spending : 1;
-          const pct = income ? ((parseFloat(this.value) * nMonths / income) * 100).toFixed(1) : "0.0";
-          const pos = (this.value - this.min) / (this.max - this.min);
-          bubble.style.left = `calc(${pos * 100}% + ${8 - pos * 16}px)`;
-          bubble.textContent = pct + "%";
+          const pct = _pctOfIncome(parseFloat(this.value), income);
+          _updateBubble(this, pct);
           bubble.classList.remove("hidden");
         }
       });
@@ -1407,16 +1438,14 @@
     });
   }
 
+  const _resetAllBtn = document.getElementById("whatif-reset-all-btn");
+
   function updateWhatIfResetAll() {
-    const anyChanged = Array.from(
-      document.querySelectorAll(".whatif-slider")
-    ).some(s => parseFloat(s.value) !== parseFloat(s.dataset.original));
-    const resetAllBtn = document.getElementById("whatif-reset-all-btn");
-    if (whatIfActive && anyChanged) {
-      resetAllBtn.classList.remove("hidden");
-    } else {
-      resetAllBtn.classList.add("hidden");
-    }
+    const sliders    = document.querySelectorAll(".whatif-slider");
+    const anyChanged = Array.from(sliders).some(
+      s => parseFloat(s.value) !== parseFloat(s.dataset.original)
+    );
+    _resetAllBtn.classList.toggle("hidden", !(whatIfActive && anyChanged));
   }
 
   function resetSlider(resetBtn) {
@@ -1607,24 +1636,23 @@
         subtotal += amt;
       });
       subtotals[key] = subtotal;
-      document.getElementById("tmpl-sub-" + key).textContent = "$" + subtotal.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      document.getElementById("tmpl-sub-" + key).textContent = formatDollar(subtotal);
       const pctEl = document.getElementById("tmpl-pct-" + key);
       pctEl.textContent = income > 0 ? ((subtotal / income) * 100).toFixed(1) + "%" : "0%";
     });
 
     // Grand Reveal
-    const fmt = n => "$" + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
     const totalExp = Object.values(subtotals).reduce((a, b) => a + b, 0);
     ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
       const key = tmplKey(bucket);
       const amt = subtotals[key];
-      document.getElementById("gr-amt-" + key).textContent = fmt(amt);
+      document.getElementById("gr-amt-" + key).textContent = formatDollar(amt);
       document.getElementById("gr-inc-" + key).textContent = income > 0 ? ((amt / income) * 100).toFixed(1) + "%" : "0%";
       document.getElementById("gr-spd-" + key).textContent = totalExp > 0 ? ((amt / totalExp) * 100).toFixed(1) + "%" : "0%";
     });
-    document.getElementById("gr-total-expenses").textContent = fmt(totalExp);
+    document.getElementById("gr-total-expenses").textContent = formatDollar(totalExp);
     document.getElementById("gr-total-pct-inc").textContent = income > 0 ? ((totalExp / income) * 100).toFixed(1) + "%" : "0%";
-    document.getElementById("gr-total-income").textContent = fmt(income);
+    document.getElementById("gr-total-income").textContent = formatDollar(income);
     const remaining = income - totalExp;
     document.getElementById("gr-remaining").textContent = formatDollar(remaining);
     document.getElementById("gr-remaining-pct").textContent = income > 0 ? ((remaining / income) * 100).toFixed(1) + "%" : "0%";
@@ -1675,16 +1703,10 @@
   })();
 
   // ── Last 3 Months Budget Builder ─────────────────────────────────────────
-  const TM_DEFAULTS = {
-    "Necessities": ["Rent / Mortgage", "Groceries", "Utilities", "Transportation", "Insurance", "Phone Bill"],
-    "Luxuries":    ["Dining Out", "Entertainment", "Shopping", "Subscriptions", "Personal Care"],
-    "Future Self": ["Emergency Fund", "Retirement (401k/IRA)", "Investments", "Education / Skills", "Debt Payoff"]
-  };
-
-  function tmThreeKey(bucket) { return bucket.replace(/\s+/g, "-").toLowerCase(); }
+  // Reuses TMPL_DEFAULTS — same default categories as the single-month builder.
 
   function tmThreeAddRow(bucket, name = "") {
-    const container = document.getElementById("tm-rows-" + tmThreeKey(bucket));
+    const container = document.getElementById("tm-rows-" + tmplKey(bucket));
     const row = document.createElement("tr");
     row.className = "tmpl-row";
     row.innerHTML = `
@@ -1710,11 +1732,10 @@
     tmThreeUpdateHeaders();
     const incomes = [1, 2, 3].map(i => parseFloat(document.getElementById(`tm-income-${i}`).value) || 0);
     const avgIncome = (incomes[0] + incomes[1] + incomes[2]) / 3;
-    const fmt = n => "$" + Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
     const subtotalAvgs = {};
     ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
-      const key = tmThreeKey(bucket);
+      const key = tmplKey(bucket);
       const rows = document.querySelectorAll(`#tm-rows-${key} .tmpl-row`);
       let sub1 = 0, sub2 = 0, sub3 = 0;
       rows.forEach(row => {
@@ -1723,29 +1744,29 @@
         const a2 = parseFloat(amts[1].value) || 0;
         const a3 = parseFloat(amts[2].value) || 0;
         sub1 += a1; sub2 += a2; sub3 += a3;
-        row.querySelector(".tm-row-avg").textContent = fmt((a1 + a2 + a3) / 3);
+        row.querySelector(".tm-row-avg").textContent = formatDollar((a1 + a2 + a3) / 3);
       });
       const subAvg = (sub1 + sub2 + sub3) / 3;
       subtotalAvgs[key] = subAvg;
-      document.getElementById(`tm-sub-${key}`).textContent = fmt(subAvg);
+      document.getElementById(`tm-sub-${key}`).textContent = formatDollar(subAvg);
       document.getElementById(`tm-pct-${key}`).textContent =
         avgIncome > 0 ? ((subAvg / avgIncome) * 100).toFixed(1) + "%" : "0%";
     });
 
     const totalExp = Object.values(subtotalAvgs).reduce((a, b) => a + b, 0);
     ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
-      const key = tmThreeKey(bucket);
+      const key = tmplKey(bucket);
       const amt = subtotalAvgs[key];
-      document.getElementById(`tm-gr-amt-${key}`).textContent = fmt(amt);
+      document.getElementById(`tm-gr-amt-${key}`).textContent = formatDollar(amt);
       document.getElementById(`tm-gr-inc-${key}`).textContent =
         avgIncome > 0 ? ((amt / avgIncome) * 100).toFixed(1) + "%" : "0%";
       document.getElementById(`tm-gr-spd-${key}`).textContent =
         totalExp > 0 ? ((amt / totalExp) * 100).toFixed(1) + "%" : "0%";
     });
-    document.getElementById("tm-gr-total-expenses").textContent = fmt(totalExp);
+    document.getElementById("tm-gr-total-expenses").textContent = formatDollar(totalExp);
     document.getElementById("tm-gr-total-pct-inc").textContent =
       avgIncome > 0 ? ((totalExp / avgIncome) * 100).toFixed(1) + "%" : "0%";
-    document.getElementById("tm-gr-total-income").textContent = fmt(avgIncome);
+    document.getElementById("tm-gr-total-income").textContent = formatDollar(avgIncome);
     const remaining = avgIncome - totalExp;
     document.getElementById("tm-gr-remaining").textContent = formatDollar(remaining);
     document.getElementById("tm-gr-remaining-pct").textContent =
@@ -1758,7 +1779,7 @@
     const monthNames = [1, 2, 3].map(i => document.getElementById(`tm-month${i}-name`).value.trim() || `Month ${i}`);
     const buckets = {};
     ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
-      const rows = document.querySelectorAll(`#tm-rows-${tmThreeKey(bucket)} .tmpl-row`);
+      const rows = document.querySelectorAll(`#tm-rows-${tmplKey(bucket)} .tmpl-row`);
       buckets[bucket] = [];
       rows.forEach(row => {
         const name = row.querySelector("input[type='text']").value.trim() || "Category";
@@ -1786,7 +1807,7 @@
 
   (function initThreeMonth() {
     ["Necessities", "Luxuries", "Future Self"].forEach(bucket => {
-      TM_DEFAULTS[bucket].forEach(name => tmThreeAddRow(bucket, name));
+      TMPL_DEFAULTS[bucket].forEach(name => tmThreeAddRow(bucket, name));
     });
   })();
 </script>
