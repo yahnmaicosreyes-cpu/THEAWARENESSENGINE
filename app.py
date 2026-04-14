@@ -452,8 +452,10 @@ def _extract_yyyy_month(wb, sheet_name_map, months):
                 if name not in cat_order_this_month:
                     cat_order_this_month.append(name)
 
-        if not ordered_cats:
-            ordered_cats = cat_order_this_month
+        # Accumulate categories across all months, preserving order, no duplicates
+        for name in cat_order_this_month:
+            if name not in ordered_cats:
+                ordered_cats.append(name)
 
         results[month] = month_data
 
@@ -548,7 +550,7 @@ def compute_averages(monthly_data, selected_months=None):
     if n == 0:
         return {}
 
-    keys = list(next(iter(monthly_data.values())).keys())
+    keys = list(dict.fromkeys(k for m in active_months for k in monthly_data[m].keys()))
     result = {}
     for k in keys:
         total = sum(monthly_data[m].get(k, 0) for m in active_months)
@@ -569,7 +571,7 @@ def compute_totals(monthly_data, selected_months=None):
         active_months = [m for m, data in monthly_data.items() if data.get("income", 0) > 0]
     if not active_months:
         return {}
-    keys = list(next(iter(monthly_data.values())).keys())
+    keys = list(dict.fromkeys(k for m in active_months for k in monthly_data[m].keys()))
     return {k: round(sum(monthly_data[m].get(k, 0) for m in active_months), 2) for k in keys}
 
 
