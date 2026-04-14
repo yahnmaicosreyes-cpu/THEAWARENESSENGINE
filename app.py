@@ -281,8 +281,7 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
         if val and isinstance(val, str) and val.strip():
             row_labels[row_idx] = val.strip()
 
-    jan_totals_col = _find_totals_col(jan_ws)
-    if jan_totals_col is None:
+    if _find_totals_col(jan_ws) is None:
         return {}, []
 
     # ── Identify income rows ──────────────────────────────────────────────────
@@ -371,8 +370,10 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
             if name not in cat_order_this_month:
                 cat_order_this_month.append(name)
 
-        if not ordered_cats:
-            ordered_cats = cat_order_this_month
+        # Accumulate categories across all months, preserving order, no duplicates
+        for name in cat_order_this_month:
+            if name not in ordered_cats:
+                ordered_cats.append(name)
 
         results[month] = month_data
 
