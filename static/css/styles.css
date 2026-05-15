@@ -57,6 +57,38 @@ body {
   margin-right: 8px;
 }
 
+/* ── Auth & Usage notice ────────────────────────────── */
+.info-notice {
+  background: #f0f4f8;
+  border: 1px solid #c8d8e8;
+  border-left: 4px solid #0f1f3d;
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #2a3a4a;
+}
+.info-notice-heading {
+  font-weight: 700;
+  font-size: 14px;
+  color: #0f1f3d;
+  margin-bottom: 8px;
+}
+.info-notice-section { margin-bottom: 12px; }
+.info-notice-section:last-child { margin-bottom: 0; }
+.info-notice-divider { border-top: 1px solid #c8d8e8; margin: 12px 0; }
+.info-notice ul,
+.info-notice ol { margin: 6px 0 0 18px; }
+.info-notice li { margin-bottom: 3px; }
+.info-notice code {
+  background: #e4ecf4;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
 /* ── Upload area ────────────────────────────────────── */
 .upload-box {
   border: 2px dashed #aab;

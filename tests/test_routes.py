@@ -145,6 +145,33 @@ class TestDownload:
         assert "spreadsheetml" in resp.content_type
 
 
+class TestBasicAuth:
+    def test_no_credentials_returns_401(self, unauthed_client):
+        resp = unauthed_client.get("/")
+        assert resp.status_code == 401
+
+    def test_wrong_password_returns_401(self, unauthed_client):
+        import base64
+        creds = base64.b64encode(b"testuser:wrongpassword").decode()
+        resp  = unauthed_client.get("/", headers={"Authorization": f"Basic {creds}"})
+        assert resp.status_code == 401
+
+    def test_wrong_username_returns_401(self, unauthed_client):
+        import base64
+        creds = base64.b64encode(b"wronguser:testpass").decode()
+        resp  = unauthed_client.get("/", headers={"Authorization": f"Basic {creds}"})
+        assert resp.status_code == 401
+
+    def test_valid_credentials_return_200(self, client):
+        resp = client.get("/")
+        assert resp.status_code == 200
+
+    def test_401_includes_www_authenticate_header(self, unauthed_client):
+        resp = unauthed_client.get("/")
+        assert "WWW-Authenticate" in resp.headers
+        assert 'Basic realm=' in resp.headers["WWW-Authenticate"]
+
+
 class TestSecurity:
     def test_session_cookie_httponly(self, client):
         client.post(

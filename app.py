@@ -7,13 +7,14 @@ All business logic lives in separate modules:
   excel_builders.py  — Excel file generation
 """
 
+import base64
 import io
 import json
 import os
 import secrets
 import tempfile
 import warnings
-from flask import Flask, render_template, request, jsonify, send_file, session
+from flask import Flask, render_template, request, jsonify, send_file, session, Response
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -40,6 +41,55 @@ limiter = Limiter(
     storage_uri="memory://",
     default_limits=[],
 )
+
+
+# ── HTTP Basic Auth ───────────────────────────────────────────────────────────
+
+def _check_basic_auth():
+    """Validate the Authorization header against env-var credentials.
+
+    Credentials are never stored in code — set BASIC_AUTH_USERNAME and
+    BASIC_AUTH_PASSWORD as environment variables (e.g. in Render's dashboard).
+    Returns True only when both env vars are set AND the header matches.
+    """
+    expected_user = os.environ.get("BASIC_AUTH_USERNAME", "")
+    expected_pass = os.environ.get("BASIC_AUTH_PASSWORD", "")
+
+    # If credentials aren't configured, block all access to prevent
+    # accidentally running an unprotected instance in production.
+    if not expected_user or not expected_pass:
+        return False
+
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Basic "):
+        return False
+
+    try:
+        # Decode the base64 "username:password" payload from the header.
+        decoded  = base64.b64decode(header[6:]).decode("utf-8")
+        username, _, password = decoded.partition(":")
+        return username == expected_user and password == expected_pass
+    except Exception:
+        return False
+
+
+@app.before_request
+def require_auth():
+    """Gate every request behind HTTP Basic Auth.
+
+    The browser caches credentials for the session, so the user is only
+    prompted once. To sign out the user must close the browser or manually
+    clear saved passwords — there is no server-side logout for Basic Auth.
+    """
+    if _check_basic_auth():
+        return  # credentials valid — let the request through
+
+    # Return 401 with WWW-Authenticate to trigger the browser's login dialog.
+    return Response(
+        "Authentication required.",
+        401,
+        {"WWW-Authenticate": 'Basic realm="The Awareness Engine"'},
+    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
