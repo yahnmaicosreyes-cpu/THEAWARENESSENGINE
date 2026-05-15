@@ -7,10 +7,13 @@ All business logic lives in separate modules:
   excel_builders.py  — Excel file generation
 """
 
+import io
+import json
 import os
 import secrets
 import tempfile
-from flask import Flask, render_template, request, jsonify, send_file, session, after_this_request
+import warnings
+from flask import Flask, render_template, request, jsonify, send_file, session
 
 from extractors import extract_data, BUCKET_LABELS
 from data_processing import compute_averages, compute_totals, build_table_data
@@ -18,16 +21,63 @@ from excel_builders import build_output_xlsx, build_single_month_template, build
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+if not os.environ.get("SECRET_KEY"):
+    warnings.warn(
+        "SECRET_KEY env var is not set — using a random key. "
+        "All sessions will be invalidated on every server restart.",
+        RuntimeWarning, stacklevel=1,
+    )
 app.config["SESSION_COOKIE_SECURE"]   = True   # only send cookie over HTTPS
 app.config["SESSION_COOKIE_HTTPONLY"] = True   # block JavaScript from reading the cookie
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # block cross-site request forgery
 app.config["MAX_CONTENT_LENGTH"]      = 10 * 1024 * 1024  # 10 MB upload limit
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _clear_monthly_data():
+    """Delete the server-side JSON file for the current session's monthly data."""
+    path = session.get("monthly_data_path")
+    if path and os.path.exists(path):
+        try:
+            os.unlink(path)
+        except Exception:
+            pass
+
+
+def _load_monthly_data():
+    """Load monthly data from the server-side JSON file."""
+    path = session.get("monthly_data_path")
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def _serve_and_delete(file_path, download_name):
+    """Read file into memory buffer, delete from disk, then serve the buffer.
+
+    Avoids Windows file-lock errors that occur when trying to unlink a file
+    that send_file still has open.
+    """
+    buf = io.BytesIO()
+    with open(file_path, "rb") as f:
+        buf.write(f.read())
+    os.unlink(file_path)
+    buf.seek(0)
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=download_name,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
+    _clear_monthly_data()
     session.clear()
     return render_template("index.html")
 
@@ -51,7 +101,13 @@ def upload():
         seen = set()
         category_names = [n for n in category_names if not (n in seen or seen.add(n))]
 
-        session["monthly_data"] = monthly_data
+        # Store monthly_data server-side as JSON to avoid the ~4 KB cookie limit.
+        _clear_monthly_data()
+        tmp_json = tempfile.NamedTemporaryFile(delete=False, suffix=".json", mode="w")
+        json.dump(monthly_data, tmp_json)
+        tmp_json.close()
+        session["monthly_data_path"] = tmp_json.name
+
         averages = compute_averages(monthly_data)
         categories = [{"name": n, "amount": averages.get(n, 0)} for n in category_names]
 
@@ -72,7 +128,7 @@ def generate():
     assignments     = data.get("assignments", {})
     selected_months = data.get("selected_months", None)
 
-    monthly_data = session.get("monthly_data")
+    monthly_data = _load_monthly_data()
     if not monthly_data:
         return jsonify({"error": "No data in session. Please upload your file again."}), 400
 
@@ -120,7 +176,7 @@ def save():
             averages[cat["name"]]    = float(cat["amt"])
             assignments[cat["name"]] = bucket_name
 
-    monthly_data  = session.get("monthly_data")
+    monthly_data  = _load_monthly_data()
     active_months = session.get("active_months")
     totals        = compute_totals(monthly_data, active_months) if monthly_data else {}
 
@@ -144,56 +200,29 @@ def download():
     if not output_path or not os.path.exists(output_path):
         return "No file ready. Please generate first.", 400
 
-    @after_this_request
-    def cleanup(response):
-        try:
-            os.unlink(output_path)
-            session.pop("output_path", None)
-        except Exception:
-            pass
-        return response
-
-    return send_file(output_path, as_attachment=True,
-                     download_name="Awareness_Engine_Results.xlsx")
+    session.pop("output_path", None)
+    return _serve_and_delete(output_path, "Awareness_Engine_Results.xlsx")
 
 
 @app.route("/template/download", methods=["POST"])
 def template_download():
-    data   = request.get_json(force=True)
-    income = float(data.get("income", 0))
+    data    = request.get_json(force=True)
+    income  = float(data.get("income", 0))
     buckets = data.get("buckets", {})
 
     tmp_path = build_single_month_template(income, buckets)
-
-    @after_this_request
-    def cleanup_tmpl(response):
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-        return response
-
-    return send_file(tmp_path, as_attachment=True, download_name="Budget_Template.xlsx")
+    return _serve_and_delete(tmp_path, "Budget_Template.xlsx")
 
 
 @app.route("/three-month/download", methods=["POST"])
 def three_month_download():
-    data         = request.get_json(force=True)
-    incomes      = [float(v) for v in data.get("incomes", [0, 0, 0])]
-    month_names  = data.get("month_names", ["Month 1", "Month 2", "Month 3"])
-    buckets      = data.get("buckets", {})
+    data        = request.get_json(force=True)
+    incomes     = [float(v) for v in data.get("incomes", [0, 0, 0])]
+    month_names = data.get("month_names", ["Month 1", "Month 2", "Month 3"])
+    buckets     = data.get("buckets", {})
 
     tmp_path = build_three_month_template(incomes, month_names, buckets)
-
-    @after_this_request
-    def cleanup_three(response):
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-        return response
-
-    return send_file(tmp_path, as_attachment=True, download_name="Last_3_Months_Budget.xlsx")
+    return _serve_and_delete(tmp_path, "Last_3_Months_Budget.xlsx")
 
 
 @app.route("/download/inspiration-template")
@@ -204,4 +233,4 @@ def inspiration_template():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5050)
+    app.run(debug=os.environ.get("FLASK_DEBUG", "false").lower() == "true", port=5050)

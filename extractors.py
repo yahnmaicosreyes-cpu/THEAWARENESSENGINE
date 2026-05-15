@@ -94,6 +94,9 @@ _KNOWN_CATEGORIES = [
     ("Subscriptions",     ["subscriptions", "subscription"]),
     ("Dining Out",        ["dining out", "eating out", "dine out"]),
     ("Take Out",          ["take out", "takeout", "takeaway", "to go"]),
+    ("Tithe",             ["tithe"]),
+    ("7th Tradition",     ["7th tradition"]),
+    ("Haircut",           ["haircut"]),
 ]
 
 # Flat lookup: lowercase alias -> canonical name
@@ -102,6 +105,16 @@ _KNOWN_CATEGORY_LOOKUP = {
     for canonical, aliases in _KNOWN_CATEGORIES
     for alias in aliases
 }
+
+# DA program categories — plain sub-category rows matching these names are
+# guaranteed not to be dropped by any name-based filter.
+_DA_GUARANTEED = frozenset({
+    "Tithe", "7th Tradition", "Shelter", "Internet", "Food",
+    "Transportation", "Phone Bill", "Laundry", "Storage", "Moving",
+    "Gym", "Clothing", "Personal Care", "Haircut", "Health Care",
+    "Inner Child", "Entertainment", "Education", "Vacation",
+    "Personal Business", "Gifts", "Investments", "Taxes", "Debt Repayment",
+})
 
 
 # ── Cell helpers ───────────────────────────────────────────────────────────────
@@ -269,7 +282,7 @@ def extract_simple(wb):
         name_lower = name.lower()
         if any(name_lower == w or name_lower.startswith(w) for w in _SKIP_WORDS):
             continue
-        if not isinstance(amt, (int, float)) or amt <= 0:
+        if not isinstance(amt, (int, float)):
             continue
 
         if "income" in name_lower:
@@ -334,11 +347,11 @@ def _extract_yyyy_month(wb, sheet_name_map, months):
             if "TOTAL" in name_upper or any(name_upper.startswith(p) for p in _SKIP_PREFIXES):
                 continue
 
-            # Only read rows that are category group subtotals (bold or known category)
-            canonical = _match_known_category(name_raw)
-            if not canonical and not (cell_a.font and cell_a.font.bold):
+            # Skip bold+colored main category headers; capture plain sub-category rows only.
+            if _is_bold_colored_header(cell_a):
                 continue
 
+            canonical = _match_known_category(name_raw)
             name = canonical if canonical else name_raw
             amt_val = ws.cell(row_idx, spend_col).value
             amt = round(float(amt_val), 2) if isinstance(amt_val, (int, float)) else 0.0
@@ -363,7 +376,7 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
     """Extract data from the daily-tracking format.
     - Category labels are read from the JAN sheet only (other sheets use =JAN!Axx formulas)
     - Income is always collected individually (sub-rows between income header and next bold+colored header)
-    - Expenses: prioritize bold+colored header rows. If none found, fall back to known names
+    - Expenses: capture plain, unformatted sub-category rows only; bold+colored header rows are skipped
     - Dual-calculation: compares own daily sum vs TOTALS col, trusts own sum if mismatch
     - Handles variable month lengths automatically
     """
@@ -393,20 +406,20 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
                 income_rows.add(row_idx)
 
     # ── Identify expense rows ─────────────────────────────────────────────────
-    bold_colored_expense_rows = set()
+    # Capture plain, unformatted sub-category rows only.
+    # Bold+colored rows are main category headers and are always skipped.
+    expense_rows = set()
     for row_idx, label in row_labels.items():
         if row_idx in income_rows:
             continue
+        label_upper = label.upper().strip()
+        if any(label_upper.startswith(p) for p in _SKIP_PREFIXES):
+            continue
+        if label_upper in _STRUCTURAL_HEADERS:
+            continue
         cell = jan_ws.cell(row_idx, 1)
-        if _is_bold_colored_header(cell):
-            label_upper = label.upper().strip()
-            if any(label_upper.startswith(p) for p in _SKIP_PREFIXES):
-                continue
-            if label_upper in _STRUCTURAL_HEADERS:
-                continue
-            bold_colored_expense_rows.add(row_idx)
-
-    use_bold_colored = len(bold_colored_expense_rows) > 0
+        if not _is_bold_colored_header(cell):
+            expense_rows.add(row_idx)
 
     results = {}
     ordered_cats = []
@@ -435,12 +448,8 @@ def _extract_daily_tracking(wb, sheet_name_map, months):
                 month_data["income"] = round(month_data["income"] + total, 2)
                 continue
 
-            if use_bold_colored:
-                if row_idx not in bold_colored_expense_rows:
-                    continue
-            else:
-                if not _match_known_category(label):
-                    continue
+            if row_idx not in expense_rows:
+                continue
 
             total = _read_row_total(ws, row_idx, totals_col)
             if total == 0.0:
@@ -494,32 +503,49 @@ def extract_data(filepath):
         if totals_col is None:
             continue
 
-        headers = []
+        # Bold+colored rows are section boundaries only — not captured as categories.
+        section_headers = []
         for row_idx in range(1, ws.max_row + 1):
             cell = ws.cell(row=row_idx, column=1)
-            if _is_category_header(cell):
-                canonical = _match_known_category(cell.value)
-                name = canonical if canonical else str(cell.value).strip()
-                headers.append((row_idx, name))
+            if _is_bold_colored_header(cell) and cell.value:
+                name = str(cell.value).strip()
+                if name:
+                    section_headers.append((row_idx, name))
 
         month_data = {"income": 0.0}
         cat_order_this_month = []
 
-        for i, (row_idx, name) in enumerate(headers):
-            data_start = row_idx + 1
-            data_end = (headers[i + 1][0] - 1) if i + 1 < len(headers) else ws.max_row
-            name_upper = name.upper()
+        for i, (row_idx, section_name) in enumerate(section_headers):
+            section_start = row_idx + 1
+            section_end = (section_headers[i + 1][0] - 1) if i + 1 < len(section_headers) else ws.max_row
+            section_upper = section_name.upper()
 
-            if "TOTAL" in name_upper or any(name_upper.startswith(p) for p in _SKIP_PREFIXES):
+            if "TOTAL" in section_upper or any(section_upper.startswith(p) for p in _SKIP_PREFIXES):
                 continue
 
-            total = _sum_col(ws, data_start, data_end, totals_col)
-
-            if "INCOME" in name_upper:
-                month_data["income"] = total
+            if "INCOME" in section_upper:
+                month_data["income"] = _sum_col(ws, section_start, section_end, totals_col)
             else:
-                month_data[name] = total
-                cat_order_this_month.append(name)
+                for sub_row in range(section_start, section_end + 1):
+                    sub_cell = ws.cell(row=sub_row, column=1)
+                    if not sub_cell.value or not isinstance(sub_cell.value, str):
+                        continue
+                    sub_name = sub_cell.value.strip()
+                    if not sub_name:
+                        continue
+                    sub_upper = sub_name.upper()
+                    if "TOTAL" in sub_upper or any(sub_upper.startswith(p) for p in _SKIP_PREFIXES):
+                        continue
+                    if _is_bold_colored_header(sub_cell):
+                        continue
+                    amt_val = ws.cell(sub_row, totals_col).value
+                    if not isinstance(amt_val, (int, float)) or amt_val == 0:
+                        continue
+                    canonical = _match_known_category(sub_name)
+                    name = canonical if canonical else sub_name
+                    month_data[name] = round(month_data.get(name, 0.0) + float(amt_val), 2)
+                    if name not in cat_order_this_month:
+                        cat_order_this_month.append(name)
 
         if not ordered_cats:
             ordered_cats = cat_order_this_month
