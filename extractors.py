@@ -269,7 +269,7 @@ def extract_simple(wb):
         name_lower = name.lower()
         if any(name_lower == w or name_lower.startswith(w) for w in _SKIP_WORDS):
             continue
-        if not isinstance(amt, (int, float)) or amt <= 0:
+        if not isinstance(amt, (int, float)):
             continue
 
         if "income" in name_lower:
