@@ -115,6 +115,34 @@ class TestGenerate:
         )
         assert resp.status_code == 400
 
+    def test_custom_bucket_appears_in_table_and_breakdown(self, client):
+        """A custom bucket gets full first-class treatment in results."""
+        upload = client.post(
+            "/upload",
+            data={"file": (_make_simple_xlsx(), "budget.xlsx")},
+            content_type="multipart/form-data",
+        )
+        cats = upload.get_json()["categories"]
+        # Assign one category to a custom bucket, the rest to built-ins
+        assignments = {}
+        for i, c in enumerate(cats):
+            assignments[c["name"]] = "My Custom" if i == 0 else "Necessities"
+
+        gen = client.post(
+            "/generate",
+            json={"assignments": assignments, "selected_months": None},
+        )
+        assert gen.status_code == 200
+        data = gen.get_json()
+
+        # Custom bucket must appear in the table buckets list
+        bucket_names = [b["name"] for b in data["table"]["buckets"]]
+        assert "My Custom" in bucket_names
+
+        # Categories assigned to custom bucket must appear in monthly_breakdown
+        custom_cat = cats[0]["name"]
+        assert custom_cat in data["monthly_breakdown"]
+
 
 class TestDownload:
     def test_no_file_ready_returns_400(self, client):

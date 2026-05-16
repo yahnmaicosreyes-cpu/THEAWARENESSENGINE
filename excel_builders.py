@@ -42,13 +42,16 @@ def _make_budget_template_styles():
 
 def _render_bucket_sections(ws, averages, assignments, totals, buckets, income,
                              style_fn, bucket_fill, label_font, bucket_font,
-                             center, right, left, border, start_row):
-    """Render all three bucket sections into ws. Returns the next available row."""
+                             center, right, left, border, start_row, all_buckets=None):
+    """Render all bucket sections into ws. Returns the next available row.
+    all_buckets controls order; defaults to BUCKET_LABELS for backwards compat."""
+    if all_buckets is None:
+        all_buckets = BUCKET_LABELS
     total_fill  = PatternFill("solid", start_color="2C3E50")
     total_white = Font(name="Arial", bold=True, size=11, color="FFFFFF")
     current_row = start_row
 
-    for bucket_name in BUCKET_LABELS:
+    for bucket_name in all_buckets:
         cats = buckets[bucket_name]
         fill = bucket_fill[bucket_name]
 
@@ -118,8 +121,11 @@ def _render_bucket_sections(ws, averages, assignments, totals, buckets, income,
 
 
 def _render_grand_reveal(ws, averages, assignments, totals, buckets, income,
-                          style_fn, center, right, border, start_row):
-    """Render the Grand Reveal summary section into ws."""
+                          style_fn, center, right, border, start_row, all_buckets=None):
+    """Render the Grand Reveal summary section into ws.
+    all_buckets controls order; defaults to BUCKET_LABELS for backwards compat."""
+    if all_buckets is None:
+        all_buckets = BUCKET_LABELS
     current_row = start_row + 1   # one spacer before the header
 
     reveal_fill = PatternFill("solid", start_color="1A5276")
@@ -147,7 +153,7 @@ def _render_grand_reveal(ws, averages, assignments, totals, buckets, income,
     all_spent     = sum(v for k, v in averages.items() if k != "income" and k not in left_out)
     all_raw_spent = sum(totals.get(k, 0) for k in averages if k != "income" and k not in left_out)
 
-    for bucket_name in BUCKET_LABELS:
+    for bucket_name in all_buckets:
         cats = buckets[bucket_name]
         bucket_total     = sum(averages.get(c, 0) for c in cats)
         bucket_raw_total = sum(totals.get(c, 0) for c in cats)
@@ -241,6 +247,17 @@ def build_output_xlsx(averages, assignments, totals=None):
         "Future Self": PatternFill("solid", start_color="FEF9E7"),
     }
 
+    # ── Derive full bucket order (built-ins first, then custom) ───────────────
+    _custom_palette = ["EDE7F6", "E0F2F1", "FCE4EC", "FFF8E1", "F3E5F5"]
+    known_buckets  = set(BUCKET_LABELS)
+    custom_buckets = list(dict.fromkeys(
+        b for b in assignments.values() if b != "Leave Out" and b not in known_buckets
+    ))
+    all_buckets = BUCKET_LABELS + custom_buckets
+    # Assign a fill color to each custom bucket (cycling through the palette)
+    for i, b in enumerate(custom_buckets):
+        bucket_fill[b] = PatternFill("solid", start_color=_custom_palette[i % len(_custom_palette)])
+
     # ── Column widths ─────────────────────────────────────────────────────────
     ws.column_dimensions["A"].width = 30
     ws.column_dimensions["B"].width = 22
@@ -268,8 +285,8 @@ def build_output_xlsx(averages, assignments, totals=None):
     ws.row_dimensions[3].height = 22
     ws.row_dimensions[4].height = 8   # spacer
 
-    # ── Group categories by bucket ────────────────────────────────────────────
-    buckets = {b: [] for b in BUCKET_LABELS}
+    # ── Group categories by bucket (all buckets including custom) ─────────────
+    buckets = {b: [] for b in all_buckets}
     for cat, bucket in assignments.items():
         if bucket in buckets:
             buckets[bucket].append(cat)
@@ -278,13 +295,13 @@ def build_output_xlsx(averages, assignments, totals=None):
     next_row = _render_bucket_sections(
         ws, averages, assignments, totals, buckets, income,
         style, bucket_fill, label_font, bucket_font, center, right, left, border,
-        start_row=5
+        start_row=5, all_buckets=all_buckets
     )
 
     # ── Grand Reveal ──────────────────────────────────────────────────────────
     _render_grand_reveal(
         ws, averages, assignments, totals, buckets, income,
-        style, center, right, border, start_row=next_row
+        style, center, right, border, start_row=next_row, all_buckets=all_buckets
     )
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
@@ -321,9 +338,12 @@ def _write_grand_reveal_section(ws, row, bucket_totals, bucket_fills, income,
         ws[f"{col}{row}"].border    = border
     row += 1
 
+    # Custom fallback fill for any bucket not in the built-in palette
+    _fallback_fill = PatternFill("solid", fgColor="EDE7F6")
+
     total_spending = sum(bucket_totals.values())
-    for bucket_name, b_fill in bucket_fills.items():
-        amt     = bucket_totals[bucket_name]
+    for bucket_name, amt in bucket_totals.items():
+        b_fill  = bucket_fills.get(bucket_name, _fallback_fill)
         pct_inc = round((amt / income * 100), 1) if income else 0.0
         pct_spd = round((amt / total_spending * 100), 1) if total_spending else 0.0
         ws[f"A{row}"] = bucket_name
@@ -402,9 +422,22 @@ def build_single_month_template(income, buckets_input):
     ws["A2"].border       = border
     ws["B2"].border       = border
 
+    # Ordered bucket list: built-ins first, then any custom buckets from input
+    _known = set(BUCKET_LABELS)
+    ordered_buckets = [b for b in BUCKET_LABELS if b in buckets_input] + \
+                      [b for b in buckets_input if b not in _known]
+    # Extend font/fill dicts with fallback styles for custom buckets
+    _custom_colors_tpl = ["EDE7F6", "E0F2F1", "FCE4EC"]
+    _custom_idx = 0
+    for b in ordered_buckets:
+        if b not in bucket_fills:
+            bucket_fills[b] = PatternFill("solid", fgColor=_custom_colors_tpl[_custom_idx % len(_custom_colors_tpl)])
+            bucket_fonts[b]  = Font(name="Calibri", bold=True, size=12, color="4A235A")
+            _custom_idx += 1
+
     row = 4
     bucket_totals = {}
-    for bucket_name in BUCKET_LABELS:
+    for bucket_name in ordered_buckets:
         cats = buckets_input.get(bucket_name, [])
         ws.merge_cells(f"A{row}:B{row}")
         ws[f"A{row}"]           = bucket_name.upper()
@@ -490,9 +523,22 @@ def build_three_month_template(incomes, month_names, buckets_input):
     ws["A2"].border       = border
     ws["B2"].border       = border
 
+    # Ordered bucket list: built-ins first, then any custom buckets from input
+    _known = set(BUCKET_LABELS)
+    ordered_buckets = [b for b in BUCKET_LABELS if b in buckets_input] + \
+                      [b for b in buckets_input if b not in _known]
+    # Extend font/fill dicts with fallback styles for custom buckets
+    _custom_colors_tpl = ["EDE7F6", "E0F2F1", "FCE4EC"]
+    _custom_idx = 0
+    for b in ordered_buckets:
+        if b not in bucket_fills:
+            bucket_fills[b] = PatternFill("solid", fgColor=_custom_colors_tpl[_custom_idx % len(_custom_colors_tpl)])
+            bucket_fonts[b]  = Font(name="Calibri", bold=True, size=12, color="4A235A")
+            _custom_idx += 1
+
     row = 4
     bucket_totals = {}
-    for bucket_name in BUCKET_LABELS:
+    for bucket_name in ordered_buckets:
         cats = buckets_input.get(bucket_name, [])
         ws.merge_cells(f"A{row}:B{row}")
         ws[f"A{row}"]           = bucket_name.upper()

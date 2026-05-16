@@ -363,6 +363,23 @@
       <strong>You decide — no guessing.</strong>
     </p>
 
+    <!-- Custom Bucket Manager — add up to 3 extra buckets beyond the built-ins -->
+    <div id="custom-bucket-manager" class="bucket-manager">
+      <div class="bucket-manager-label">
+        Custom Buckets <span style="font-weight:normal;color:#888;font-size:12px;">(optional — max 3)</span>
+      </div>
+      <div class="bucket-chips-row" id="custom-bucket-chips">
+        <button id="add-bucket-btn" class="add-bucket-btn" onclick="addCustomBucket()">+ Add Custom Bucket</button>
+      </div>
+      <div id="new-bucket-form" class="new-bucket-form hidden">
+        <input type="text" id="new-bucket-input" class="bucket-name-input"
+               maxlength="30" placeholder="Bucket name…"
+               onkeydown="if(event.key==='Enter')confirmNewBucket();else if(event.key==='Escape')cancelNewBucket();">
+        <button class="bucket-confirm-btn" onclick="confirmNewBucket()">Add</button>
+        <button class="bucket-cancel-btn" onclick="cancelNewBucket()">Cancel</button>
+      </div>
+    </div>
+
     <div class="progress-bar">
       <div class="progress-fill" id="progress-fill" style="width:0%"></div>
     </div>

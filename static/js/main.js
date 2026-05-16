@@ -5,7 +5,14 @@ let assignments       = {};           // { cat_name: bucket_label }
 let tableData         = null;         // current rendered table data
 let originalTableData = null;         // snapshot at last save/generate
 let trendData         = null;         // { monthly_breakdown, trend_months }
+let customBuckets     = [];           // user-created bucket names (max 3)
+const MAX_CUSTOM_BUCKETS = 3;
 const BUCKETS = ["Necessities", "Luxuries", "Future Self", "Leave Out"];
+
+// All active buckets in display order: built-ins (sans Leave Out) → custom → Leave Out
+function allBuckets() {
+  return ["Necessities", "Luxuries", "Future Self", ...customBuckets, "Leave Out"];
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function formatDollar(n) {
@@ -62,9 +69,11 @@ async function uploadFile() {
       monthBox.appendChild(label);
     });
 
-    // Build category rows
-    categories = data.categories;
-    assignments = {};
+    // Build category rows (reset custom buckets for fresh upload)
+    categories    = data.categories;
+    assignments   = {};
+    customBuckets = [];
+    refreshBucketChips();
     buildCategoryRows(categories);
 
     // Transition to step 2
@@ -105,7 +114,7 @@ function buildCategoryRows(cats) {
     const choices = document.createElement("div");
     choices.className = "bucket-choices";
 
-    BUCKETS.forEach(bucket => {
+    allBuckets().forEach(bucket => {
       const btn = document.createElement("button");
       btn.className = "choice-btn";
       btn.textContent = bucket;
@@ -133,8 +142,12 @@ function selectBucket(catName, bucket) {
   row.querySelectorAll(".choice-btn").forEach(btn => {
     btn.className = "choice-btn";
     if (btn.dataset.bucket === bucket) {
-      const key = bucket.replace(" ", "");
-      btn.classList.add(`selected-${key}`);
+      // Built-in buckets have named CSS classes; custom buckets share one generic class.
+      if (BUCKETS.includes(bucket)) {
+        btn.classList.add(`selected-${bucket.replace(/ /g, "")}`);
+      } else {
+        btn.classList.add("selected-custom");
+      }
     }
   });
 
@@ -150,6 +163,95 @@ function updateProgress() {
   document.getElementById("progress-text").textContent =
     `${labeled} of ${total} labeled`;
   document.getElementById("generate-btn").disabled = (labeled < total);
+}
+
+// ── Custom Bucket Manager ────────────────────────────────────────────────
+
+function addCustomBucket() {
+  if (customBuckets.length >= MAX_CUSTOM_BUCKETS) return;
+  document.getElementById("add-bucket-btn").disabled = true;
+  const form = document.getElementById("new-bucket-form");
+  form.classList.remove("hidden");
+  const input = document.getElementById("new-bucket-input");
+  input.value = "";
+  input.classList.remove("input-error");
+  input.focus();
+}
+
+function confirmNewBucket() {
+  const input = document.getElementById("new-bucket-input");
+  const name  = input.value.trim();
+  if (!name) {
+    input.classList.add("input-error");
+    input.focus();
+    return;
+  }
+  // Reject names that duplicate any existing bucket (case-insensitive)
+  const existing = [...BUCKETS, ...customBuckets].map(b => b.toLowerCase());
+  if (existing.includes(name.toLowerCase())) {
+    input.classList.add("input-error");
+    input.focus();
+    return;
+  }
+  customBuckets.push(name);
+  input.classList.remove("input-error");
+  document.getElementById("new-bucket-form").classList.add("hidden");
+  refreshBucketChips();
+  buildCategoryRows(categories);
+  reapplyAssignments();
+}
+
+function cancelNewBucket() {
+  document.getElementById("new-bucket-form").classList.add("hidden");
+  document.getElementById("add-bucket-btn").disabled =
+    customBuckets.length >= MAX_CUSTOM_BUCKETS;
+}
+
+function removeCustomBucket(name) {
+  customBuckets = customBuckets.filter(b => b !== name);
+  // Clear assignments for categories that were in the removed bucket
+  for (const cat of Object.keys(assignments)) {
+    if (assignments[cat] === name) delete assignments[cat];
+  }
+  refreshBucketChips();
+  buildCategoryRows(categories);
+  reapplyAssignments();
+}
+
+function refreshBucketChips() {
+  const chipsRow = document.getElementById("custom-bucket-chips");
+  const addBtn   = document.getElementById("add-bucket-btn");
+  // Remove old chip elements, keep the add button
+  chipsRow.querySelectorAll(".custom-bucket-chip").forEach(c => c.remove());
+  // Insert a chip for each custom bucket, before the add button
+  customBuckets.forEach(name => {
+    const chip = document.createElement("span");
+    chip.className = "custom-bucket-chip";
+    chip.innerHTML =
+      `${escapeHtml(name)}<button class="chip-remove" ` +
+      `onclick="removeCustomBucket(${JSON.stringify(name)})" title="Remove">&times;</button>`;
+    chipsRow.insertBefore(chip, addBtn);
+  });
+  addBtn.disabled = customBuckets.length >= MAX_CUSTOM_BUCKETS;
+}
+
+// Re-highlight bucket buttons after category rows are rebuilt
+function reapplyAssignments() {
+  for (const [cat, bucket] of Object.entries(assignments)) {
+    const row = document.getElementById(`row-${sanitizeId(cat)}`);
+    if (!row) continue;
+    row.querySelectorAll(".choice-btn").forEach(btn => {
+      btn.className = "choice-btn";
+      if (btn.dataset.bucket === bucket) {
+        if (BUCKETS.includes(bucket)) {
+          btn.classList.add(`selected-${bucket.replace(/ /g, "")}`);
+        } else {
+          btn.classList.add("selected-custom");
+        }
+      }
+    });
+  }
+  updateProgress();
 }
 
 // ── Step 3: Generate ─────────────────────────────────────────────────────

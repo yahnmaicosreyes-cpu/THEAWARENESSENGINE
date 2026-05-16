@@ -215,7 +215,7 @@ def generate():
         monthly_breakdown = {
             cat: {m: round(monthly_data[m].get(cat, 0), 2) for m in active_months}
             for cat, bucket in assignments.items()
-            if bucket not in ("Leave Out",) and bucket in BUCKET_LABELS
+            if bucket != "Leave Out"
         }
 
         return jsonify({

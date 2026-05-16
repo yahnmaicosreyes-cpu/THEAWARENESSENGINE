@@ -49,8 +49,15 @@ def build_table_data(averages, assignments, totals=None):
     left_out = {cat for cat, b in assignments.items() if b == "Leave Out"}
     totals   = totals or {}
 
+    # Derive full ordered bucket list — built-ins first, then any custom buckets the
+    # user created (preserved in insertion order via dict.fromkeys).
+    known = set(BUCKET_LABELS)
+    custom = [b for b in dict.fromkeys(assignments.values())
+              if b != "Leave Out" and b not in known]
+    all_buckets = BUCKET_LABELS + custom
+
     buckets_out = []
-    for bucket_name in BUCKET_LABELS:
+    for bucket_name in all_buckets:
         cats = [cat for cat, b in assignments.items() if b == bucket_name]
         categories = [
             {"name": cat,
