@@ -7,13 +7,16 @@ All business logic lives in separate modules:
   excel_builders.py  — Excel file generation
 """
 
+import base64
 import io
 import json
 import os
 import secrets
 import tempfile
 import warnings
-from flask import Flask, render_template, request, jsonify, send_file, session
+from flask import Flask, render_template, request, jsonify, send_file, session, Response
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from extractors import extract_data, BUCKET_LABELS
 from data_processing import compute_averages, compute_totals, build_table_data
@@ -31,6 +34,62 @@ app.config["SESSION_COOKIE_SECURE"]   = True   # only send cookie over HTTPS
 app.config["SESSION_COOKIE_HTTPONLY"] = True   # block JavaScript from reading the cookie
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # block cross-site request forgery
 app.config["MAX_CONTENT_LENGTH"]      = 10 * 1024 * 1024  # 10 MB upload limit
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    storage_uri="memory://",
+    default_limits=[],
+)
+
+
+# ── HTTP Basic Auth ───────────────────────────────────────────────────────────
+
+def _check_basic_auth():
+    """Validate the Authorization header against env-var credentials.
+
+    Credentials are never stored in code — set BASIC_AUTH_USERNAME and
+    BASIC_AUTH_PASSWORD as environment variables (e.g. in Render's dashboard).
+    Returns True only when both env vars are set AND the header matches.
+    """
+    expected_user = os.environ.get("BASIC_AUTH_USERNAME", "")
+    expected_pass = os.environ.get("BASIC_AUTH_PASSWORD", "")
+
+    # If credentials aren't configured, block all access to prevent
+    # accidentally running an unprotected instance in production.
+    if not expected_user or not expected_pass:
+        return False
+
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Basic "):
+        return False
+
+    try:
+        # Decode the base64 "username:password" payload from the header.
+        decoded  = base64.b64decode(header[6:]).decode("utf-8")
+        username, _, password = decoded.partition(":")
+        return username == expected_user and password == expected_pass
+    except Exception:
+        return False
+
+
+@app.before_request
+def require_auth():
+    """Gate every request behind HTTP Basic Auth.
+
+    The browser caches credentials for the session, so the user is only
+    prompted once. To sign out the user must close the browser or manually
+    clear saved passwords — there is no server-side logout for Basic Auth.
+    """
+    if _check_basic_auth():
+        return  # credentials valid — let the request through
+
+    # Return 401 with WWW-Authenticate to trigger the browser's login dialog.
+    return Response(
+        "Authentication required.",
+        401,
+        {"WWW-Authenticate": 'Basic realm="The Awareness Engine"'},
+    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -83,6 +142,7 @@ def index():
 
 
 @app.route("/upload", methods=["POST"])
+@limiter.limit("20 per minute")
 def upload():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
@@ -91,10 +151,11 @@ def upload():
     if not f.filename.lower().endswith(".xlsx"):
         return jsonify({"error": "Please upload a .xlsx file"}), 400
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
     try:
-        f.save(tmp.name)
-        monthly_data, category_names = extract_data(tmp.name)
+        f.save(tmp_path)
+        monthly_data, category_names = extract_data(tmp_path)
 
         # Deduplicate category names (preserving order) in case the spreadsheet
         # lists the same category more than once under the same month.
@@ -119,10 +180,14 @@ def upload():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
-        os.unlink(tmp.name)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 @app.route("/generate", methods=["POST"])
+@limiter.limit("30 per minute")
 def generate():
     data            = request.get_json()
     assignments     = data.get("assignments", {})
@@ -150,7 +215,7 @@ def generate():
         monthly_breakdown = {
             cat: {m: round(monthly_data[m].get(cat, 0), 2) for m in active_months}
             for cat, bucket in assignments.items()
-            if bucket not in ("Leave Out",) and bucket in BUCKET_LABELS
+            if bucket != "Leave Out"
         }
 
         return jsonify({
@@ -195,6 +260,7 @@ def save():
 
 
 @app.route("/download")
+@limiter.limit("20 per minute")
 def download():
     output_path = session.get("output_path")
     if not output_path or not os.path.exists(output_path):

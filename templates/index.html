@@ -26,7 +26,41 @@
   <!-- HOME SCREEN -->
   <div class="card" id="home-screen">
     <h2 style="text-align:center;border-bottom:none;font-size:18px;margin-bottom:6px;">How would you like to get started?</h2>
-    <p style="text-align:center;color:#666;font-size:14px;margin-bottom:28px;">Choose your path — use Start Over anytime to switch.</p>
+    <p style="text-align:center;color:#666;font-size:14px;margin-bottom:20px;">Choose your path — use Start Over anytime to switch.</p>
+
+    <!-- Auth & usage notice — shown once on the home screen so users know
+         how this app works and how to sign out when they're done. -->
+    <div class="info-notice">
+
+      <div class="info-notice-section">
+        <div class="info-notice-heading">🔐 Password-Protected App</div>
+        <p>
+          This app is secured with <strong>HTTP Basic Auth</strong>.
+          <strong>There is no logout button</strong> — your browser keeps you signed in
+          until you explicitly clear your credentials or close the browser session.
+          To sign out, use one of the steps below:
+        </p>
+        <ul>
+          <li><strong>Chrome / Edge:</strong> Settings → Privacy &amp; security → Clear browsing data → check <em>Passwords and other sign-in data</em> → Clear now</li>
+          <li><strong>Firefox:</strong> Settings → Privacy &amp; Security → Logins and Passwords → Saved Logins → find this site and remove it</li>
+          <li><strong>Safari:</strong> Settings → Passwords → find this site and delete it</li>
+        </ul>
+      </div>
+
+      <div class="info-notice-divider"></div>
+
+      <div class="info-notice-section">
+        <div class="info-notice-heading">📖 How to Use This App</div>
+        <ol>
+          <li>Choose <strong>Upload My Spreadsheet</strong> if you have a <code>.xlsx</code> budget file, or <strong>Build My Budget</strong> to enter figures manually.</li>
+          <li>Label each expense category as <strong>Necessities</strong>, <strong>Luxuries</strong>, <strong>Future Self</strong>, or <strong>Leave Out</strong>.</li>
+          <li>Hit <strong>Generate</strong> to see your personalized budget breakdown with percentages and trends.</li>
+          <li>Download your results as an Excel file to keep or share.</li>
+        </ol>
+      </div>
+
+    </div>
+
     <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
       <div class="home-choice-card" onclick="chooseUpload()">
         <div class="home-choice-icon">📂</div>
@@ -328,6 +362,23 @@
       For each category below, choose the bucket it belongs in.
       <strong>You decide — no guessing.</strong>
     </p>
+
+    <!-- Custom Bucket Manager — add up to 3 extra buckets beyond the built-ins -->
+    <div id="custom-bucket-manager" class="bucket-manager">
+      <div class="bucket-manager-label">
+        Custom Buckets <span style="font-weight:normal;color:#888;font-size:12px;">(optional — max 3)</span>
+      </div>
+      <div class="bucket-chips-row" id="custom-bucket-chips">
+        <button id="add-bucket-btn" class="add-bucket-btn" onclick="addCustomBucket()">+ Add Custom Bucket</button>
+      </div>
+      <div id="new-bucket-form" class="new-bucket-form hidden">
+        <input type="text" id="new-bucket-input" class="bucket-name-input"
+               maxlength="30" placeholder="Bucket name…"
+               onkeydown="if(event.key==='Enter')confirmNewBucket();else if(event.key==='Escape')cancelNewBucket();">
+        <button class="bucket-confirm-btn" onclick="confirmNewBucket()">Add</button>
+        <button class="bucket-cancel-btn" onclick="cancelNewBucket()">Cancel</button>
+      </div>
+    </div>
 
     <div class="progress-bar">
       <div class="progress-fill" id="progress-fill" style="width:0%"></div>

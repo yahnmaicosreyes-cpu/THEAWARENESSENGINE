@@ -57,6 +57,38 @@ body {
   margin-right: 8px;
 }
 
+/* ── Auth & Usage notice ────────────────────────────── */
+.info-notice {
+  background: #f0f4f8;
+  border: 1px solid #c8d8e8;
+  border-left: 4px solid #0f1f3d;
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #2a3a4a;
+}
+.info-notice-heading {
+  font-weight: 700;
+  font-size: 14px;
+  color: #0f1f3d;
+  margin-bottom: 8px;
+}
+.info-notice-section { margin-bottom: 12px; }
+.info-notice-section:last-child { margin-bottom: 0; }
+.info-notice-divider { border-top: 1px solid #c8d8e8; margin: 12px 0; }
+.info-notice ul,
+.info-notice ol { margin: 6px 0 0 18px; }
+.info-notice li { margin-bottom: 3px; }
+.info-notice code {
+  background: #e4ecf4;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
 /* ── Upload area ────────────────────────────────────── */
 .upload-box {
   border: 2px dashed #aab;
@@ -518,3 +550,103 @@ button:disabled { background: #aaa; cursor: not-allowed; }
   width: 100%;
   text-align: right;
 }
+
+/* ── Custom Bucket Manager ───────────────────────────── */
+.bucket-manager {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: #f8f7fb;
+  border: 1px solid #d9cff0;
+  border-radius: 10px;
+}
+.bucket-manager-label {
+  font-size: 13px;
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 8px;
+}
+.bucket-chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.custom-bucket-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  background: #ede7f6;
+  border: 1.5px solid #9c6fd6;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: bold;
+  color: #4a235a;
+}
+.chip-remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #9c6fd6;
+  font-size: 15px;
+  padding: 0 0 0 2px;
+  line-height: 1;
+  font-weight: bold;
+}
+.chip-remove:hover { color: #c0392b; }
+.add-bucket-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  border-radius: 20px;
+  border: 2px dashed #9c6fd6;
+  background: white;
+  color: #7d4cad;
+  cursor: pointer;
+  font-weight: bold;
+  transition: all 0.15s;
+}
+.add-bucket-btn:hover:not(:disabled) { background: #ede7f6; }
+.add-bucket-btn:disabled { opacity: 0.4; cursor: default; }
+.new-bucket-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.bucket-name-input {
+  padding: 6px 12px;
+  border: 2px solid #9c6fd6;
+  border-radius: 20px;
+  font-size: 13px;
+  font-family: 'DM Sans', Arial, sans-serif;
+  outline: none;
+  width: 180px;
+}
+.bucket-name-input:focus { border-color: #6a1b9a; }
+.bucket-name-input.input-error { border-color: #e74c3c; }
+.bucket-confirm-btn {
+  padding: 6px 16px;
+  font-size: 12px;
+  border-radius: 20px;
+  border: none;
+  background: #7d4cad;
+  color: white;
+  cursor: pointer;
+  font-weight: bold;
+}
+.bucket-confirm-btn:hover { background: #6a1b9a; }
+.bucket-cancel-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  border-radius: 20px;
+  border: 2px solid #ccc;
+  background: white;
+  color: #666;
+  cursor: pointer;
+  font-weight: bold;
+}
+.bucket-cancel-btn:hover { border-color: #999; color: #333; }
+
+/* Selected state for custom (user-created) bucket buttons */
+.choice-btn.selected-custom { background: #ede7f6; border-color: #9c6fd6; color: #4a235a; }
