@@ -238,6 +238,8 @@ button:disabled { background: #aaa; cursor: not-allowed; }
 /* ── What If sliders ─────────────────────────────────── */
 .whatif-slider { width: 100%; margin-top: 4px; display: none; accent-color: #4fa8bc; }
 .whatif-active .whatif-slider { display: block; }
+/* Hide % of Spending column when What If mode is active to make room for sliders */
+.preview-table.whatif-active .pct-spending-col { display: none; }
 .btn-whatif:hover { background: #00bcd4; }
 .btn-whatif.active { background: #00bcd4; }
 .btn-trends:hover { background: #00bcd4; }
