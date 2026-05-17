@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>THE AWARENESS ENGINE — Welcome</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+
+<!-- Skip straight to the app if this user has already completed the welcome flow. -->
+<script>
+  if (localStorage.getItem('awarenessWelcomed')) {
+    location.replace('/app');
+  }
+</script>
+
+<div class="container" style="max-width:660px;padding-top:20px;">
+
+  <div class="header">
+    <h1>⚡ The Awareness Engine</h1>
+    <p>Upload your spreadsheet. Label your categories. Get the truth.</p>
+  </div>
+
+  <div class="card">
+
+    <div class="info-notice" style="margin-bottom:28px;">
+      <div class="info-notice-section">
+        <div class="info-notice-heading">🔐 Password-Protected App</div>
+        <p>
+          This app is secured with <strong>HTTP Basic Auth</strong>.
+          <strong>There is no logout button</strong> — your browser keeps you signed in
+          until you explicitly clear your credentials or close the browser session.
+          To sign out, use one of the steps below:
+        </p>
+        <ul>
+          <li><strong>Chrome / Edge:</strong> Settings → Privacy &amp; security → Clear browsing data → check <em>Passwords and other sign-in data</em> → Clear now</li>
+          <li><strong>Firefox:</strong> Settings → Privacy &amp; Security → Logins and Passwords → Saved Logins → find this site and remove it</li>
+          <li><strong>Safari:</strong> Settings → Passwords → find this site and delete it</li>
+        </ul>
+      </div>
+    </div>
+
+    <div style="text-align:center;">
+      <button onclick="location.href='/app'" style="font-size:15px;padding:14px 48px;letter-spacing:0.3px;">
+        🔑 Login to Continue
+      </button>
+      <p style="margin-top:14px;font-size:12px;color:#999;">
+        Clicking Login will open a credentials prompt from your browser.
+      </p>
+    </div>
+
+  </div>
+
+</div>
+</body>
+</html>

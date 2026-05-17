@@ -77,10 +77,14 @@ def _check_basic_auth():
 def require_auth():
     """Gate every request behind HTTP Basic Auth.
 
-    The browser caches credentials for the session, so the user is only
-    prompted once. To sign out the user must close the browser or manually
-    clear saved passwords — there is no server-side logout for Basic Auth.
+    The welcome page (/) and static assets are intentionally public so the
+    security description renders before the user logs in. Every other route
+    requires valid credentials.
     """
+    # Welcome page and static assets must load without auth.
+    if request.path == "/" or request.path.startswith("/static/"):
+        return
+
     if _check_basic_auth():
         return  # credentials valid — let the request through
 
@@ -135,6 +139,12 @@ def _serve_and_delete(file_path, download_name):
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
+def welcome():
+    """Public welcome page — shows security description before login."""
+    return render_template("welcome.html")
+
+
+@app.route("/app")
 def index():
     _clear_monthly_data()
     session.clear()

@@ -13,6 +13,7 @@
 
 <div class="top-bar">
   <button onclick="resetApp()">↩ Start Over</button>
+  <button onclick="showSecurityInfo()" style="background:#1a3a5c;font-size:12px;padding:6px 14px;margin-left:10px;">🔐 Security Info</button>
 </div>
 
 <div class="container">
@@ -28,27 +29,9 @@
     <h2 style="text-align:center;border-bottom:none;font-size:18px;margin-bottom:6px;">How would you like to get started?</h2>
     <p style="text-align:center;color:#666;font-size:14px;margin-bottom:20px;">Choose your path — use Start Over anytime to switch.</p>
 
-    <!-- Auth & usage notice — shown once on the home screen so users know
-         how this app works and how to sign out when they're done. -->
+    <!-- Usage notice — security info lives on the welcome page and is
+         accessible anytime via the 🔐 Security Info button in the top bar. -->
     <div class="info-notice">
-
-      <div class="info-notice-section">
-        <div class="info-notice-heading">🔐 Password-Protected App</div>
-        <p>
-          This app is secured with <strong>HTTP Basic Auth</strong>.
-          <strong>There is no logout button</strong> — your browser keeps you signed in
-          until you explicitly clear your credentials or close the browser session.
-          To sign out, use one of the steps below:
-        </p>
-        <ul>
-          <li><strong>Chrome / Edge:</strong> Settings → Privacy &amp; security → Clear browsing data → check <em>Passwords and other sign-in data</em> → Clear now</li>
-          <li><strong>Firefox:</strong> Settings → Privacy &amp; Security → Logins and Passwords → Saved Logins → find this site and remove it</li>
-          <li><strong>Safari:</strong> Settings → Passwords → find this site and delete it</li>
-        </ul>
-      </div>
-
-      <div class="info-notice-divider"></div>
-
       <div class="info-notice-section">
         <div class="info-notice-heading">📖 How to Use This App</div>
         <ol>
@@ -58,7 +41,6 @@
           <li>Download your results as an Excel file to keep or share.</li>
         </ol>
       </div>
-
     </div>
 
     <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
@@ -420,6 +402,31 @@
 
 </div>
 
+<!-- Security Info modal — opened from the 🔐 button in the top bar -->
+<div id="security-overlay" class="overlay hidden">
+  <div class="overlay-box" style="max-width:480px;text-align:left;">
+    <div class="info-notice" style="margin-bottom:0;">
+      <div class="info-notice-section">
+        <div class="info-notice-heading">🔐 Password-Protected App</div>
+        <p>
+          This app is secured with <strong>HTTP Basic Auth</strong>.
+          <strong>There is no logout button</strong> — your browser keeps you signed in
+          until you explicitly clear your credentials or close the browser session.
+          To sign out, use one of the steps below:
+        </p>
+        <ul>
+          <li><strong>Chrome / Edge:</strong> Settings → Privacy &amp; security → Clear browsing data → check <em>Passwords and other sign-in data</em> → Clear now</li>
+          <li><strong>Firefox:</strong> Settings → Privacy &amp; Security → Logins and Passwords → Saved Logins → find this site and remove it</li>
+          <li><strong>Safari:</strong> Settings → Passwords → find this site and delete it</li>
+        </ul>
+      </div>
+    </div>
+    <div class="overlay-actions" style="margin-top:20px;justify-content:center;">
+      <button onclick="hideSecurityInfo()">Got it</button>
+    </div>
+  </div>
+</div>
+
 <!-- Save / Discard overlay -->
 <div id="save-overlay" class="overlay hidden">
   <div class="overlay-box">
@@ -437,5 +444,16 @@
 <script src="{{ url_for('static', filename='js/table.js') }}"></script>
 <script src="{{ url_for('static', filename='js/whatif.js') }}"></script>
 <script src="{{ url_for('static', filename='js/builders.js') }}"></script>
+<script>
+  // Mark this browser as having completed the welcome flow.
+  localStorage.setItem('awarenessWelcomed', '1');
+
+  function showSecurityInfo() {
+    document.getElementById('security-overlay').classList.remove('hidden');
+  }
+  function hideSecurityInfo() {
+    document.getElementById('security-overlay').classList.add('hidden');
+  }
+</script>
 </body>
 </html>

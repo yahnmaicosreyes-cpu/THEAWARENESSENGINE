@@ -175,27 +175,33 @@ class TestDownload:
 
 class TestBasicAuth:
     def test_no_credentials_returns_401(self, unauthed_client):
-        resp = unauthed_client.get("/")
+        # / is now the public welcome page; /app requires auth
+        resp = unauthed_client.get("/app")
         assert resp.status_code == 401
 
     def test_wrong_password_returns_401(self, unauthed_client):
         import base64
         creds = base64.b64encode(b"testuser:wrongpassword").decode()
-        resp  = unauthed_client.get("/", headers={"Authorization": f"Basic {creds}"})
+        resp  = unauthed_client.get("/app", headers={"Authorization": f"Basic {creds}"})
         assert resp.status_code == 401
 
     def test_wrong_username_returns_401(self, unauthed_client):
         import base64
         creds = base64.b64encode(b"wronguser:testpass").decode()
-        resp  = unauthed_client.get("/", headers={"Authorization": f"Basic {creds}"})
+        resp  = unauthed_client.get("/app", headers={"Authorization": f"Basic {creds}"})
         assert resp.status_code == 401
 
     def test_valid_credentials_return_200(self, client):
-        resp = client.get("/")
+        resp = client.get("/app")
+        assert resp.status_code == 200
+
+    def test_welcome_page_is_public(self, unauthed_client):
+        # / must load without any credentials so the security description shows
+        resp = unauthed_client.get("/")
         assert resp.status_code == 200
 
     def test_401_includes_www_authenticate_header(self, unauthed_client):
-        resp = unauthed_client.get("/")
+        resp = unauthed_client.get("/app")
         assert "WWW-Authenticate" in resp.headers
         assert 'Basic realm=' in resp.headers["WWW-Authenticate"]
 
