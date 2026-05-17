@@ -15,29 +15,34 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-function _renderBucketSection(bucket, income) {
+function _renderBucketSection(bucket, income, totalSpending) {
   const color = BUCKET_COLORS[bucket.name] || "#f8f8f8";
+  const bucketPctSpending = totalSpending
+    ? ((bucket.total / totalSpending) * 100).toFixed(1) : "0.0";
   let html = "";
 
-  html += `<tr><td colspan="5" style="background:${color};font-weight:bold;font-size:13px;padding:10px;">▶ ${escapeHtml(bucket.name.toUpperCase())}</td></tr>`;
+  html += `<tr><td colspan="6" style="background:${color};font-weight:bold;font-size:13px;padding:10px;">▶ ${escapeHtml(bucket.name.toUpperCase())}</td></tr>`;
   html += `<tr style="font-size:11px;font-weight:bold;text-align:center;">
     <td style="background:${color};">Category</td>
     <td style="background:${color};">Total Spending (all months)</td>
     <td style="background:${color};">Avg Monthly Spending</td>
     <td style="background:${color};">% of Income</td>
+    <td class="pct-spending-col" style="background:${color};">% of Spending</td>
     <td style="background:${color};"></td>
   </tr>`;
 
   if (bucket.categories.length === 0) {
-    html += `<tr><td colspan="4" style="background:${color};color:#888;">(No categories assigned)</td><td style="background:${color};"></td></tr>`;
+    html += `<tr><td colspan="4" style="background:${color};color:#888;">(No categories assigned)</td><td class="pct-spending-col" style="background:${color};"></td><td style="background:${color};"></td></tr>`;
   } else {
     bucket.categories.forEach(cat => {
-      const pct = income ? ((cat.raw_total / income) * 100).toFixed(1) : "0.0";
+      const pctIncome   = income        ? ((cat.raw_total / income)        * 100).toFixed(1) : "0.0";
+      const pctSpending = totalSpending ? ((cat.amt       / totalSpending) * 100).toFixed(1) : "0.0";
       html += `<tr class="cat-data-row" data-bucket="${escapeHtml(bucket.name)}">
         <td class="editable" contenteditable="true" style="background:${color};" data-field="name">${escapeHtml(cat.name)}</td>
         <td style="background:${color};text-align:right;" data-field="raw_total">${formatDollar(cat.raw_total)}</td>
         <td class="editable" contenteditable="true" style="background:${color};text-align:right;" data-field="amt" data-raw="${cat.amt}">${formatDollar(cat.amt)}</td>
-        <td class="cat-pct" style="background:${color};text-align:center;">${pct}%</td>
+        <td class="cat-pct" style="background:${color};text-align:center;">${pctIncome}%</td>
+        <td class="pct-spending-col" style="background:${color};text-align:center;">${pctSpending}%</td>
         <td style="background:${color};"><div class="slider-wrap"><span class="slider-bubble hidden"></span><input type="range" class="whatif-slider" min="0" max="${cat.amt * 2 || 1000}" step="1" value="${cat.amt}" data-original="${cat.amt}"><button class="whatif-reset-btn hidden" onclick="resetSlider(this)" title="Reset to original">↺</button></div></td>
       </tr>`;
     });
@@ -48,9 +53,10 @@ function _renderBucketSection(bucket, income) {
     <td style="background:#2c3e50;color:white;font-weight:bold;text-align:right;">${formatDollar(bucket.raw_total)}</td>
     <td style="background:#2c3e50;color:white;font-weight:bold;text-align:right;">${formatDollar(bucket.total)}</td>
     <td style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">${bucket.pct_income.toFixed(1)}%</td>
+    <td class="pct-spending-col" style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">${bucketPctSpending}%</td>
     <td style="background:#2c3e50;color:white;"></td>
   </tr>`;
-  html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
+  html += `<tr class="spacer-row"><td colspan="6"></td></tr>`;
 
   return html;
 }
@@ -62,10 +68,10 @@ function _renderGrandReveal(data) {
   const remBg        = remaining < 0 ? "#FDECEA"  : "#D5F5E3";
 
   let html = "";
-  html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
-  html += `<tr><td colspan="5" style="background:#1a5276;color:white;font-weight:bold;font-size:13px;text-align:center;padding:10px;">─── GRAND REVEAL ───</td></tr>`;
+  html += `<tr class="spacer-row"><td colspan="6"></td></tr>`;
+  html += `<tr><td colspan="6" style="background:#1a5276;color:white;font-weight:bold;font-size:13px;text-align:center;padding:10px;">─── GRAND REVEAL ───</td></tr>`;
   html += `<tr style="background:#1a5276;color:white;font-size:11px;font-weight:bold;text-align:center;">
-    <td>Bucket</td><td>Total Spending (all months)</td><td>Avg Monthly Spending</td><td>% of Spending</td><td>% of Income</td>
+    <td>Bucket</td><td>Total Spending (all months)</td><td>Avg Monthly Spending</td><td>% of Spending</td><td>% of Income</td><td></td>
   </tr>`;
   data.grand_reveal.forEach(row => {
     html += `<tr style="text-align:center;font-weight:bold;">
@@ -74,6 +80,7 @@ function _renderGrandReveal(data) {
       <td>${formatDollar(row.total)}</td>
       <td>${row.pct_spending.toFixed(1)}%</td>
       <td>${row.pct_income.toFixed(1)}%</td>
+      <td></td>
     </tr>`;
   });
   html += `<tr style="background:#2c3e50;color:white;font-weight:bold;text-align:center;">
@@ -82,6 +89,7 @@ function _renderGrandReveal(data) {
     <td>${formatDollar(data.total_spending)}</td>
     <td>100.0%</td>
     <td>${data.total_pct_income.toFixed(1)}%</td>
+    <td></td>
   </tr>`;
   html += `<tr style="background:${remBg};color:${remColor};font-weight:bold;text-align:center;">
     <td>💰 Remaining Income</td>
@@ -89,6 +97,7 @@ function _renderGrandReveal(data) {
     <td>—</td>
     <td>—</td>
     <td>${remainingPct}%</td>
+    <td></td>
   </tr>`;
 
   return html;
@@ -100,19 +109,20 @@ function renderTable(data) {
 
   let html = `<table class="preview-table">`;
 
-  html += `<tr><td colspan="5" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">THE AWARENESS ENGINE — My Financial Reality</td></tr>`;
-  html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
+  html += `<tr><td colspan="6" style="background:#2c3e50;color:white;font-weight:bold;font-size:14px;text-align:center;padding:12px;">THE AWARENESS ENGINE — My Financial Reality</td></tr>`;
+  html += `<tr class="spacer-row"><td colspan="6"></td></tr>`;
   html += `<tr>
     <td style="font-weight:bold;">Total Income</td>
     <td style="font-weight:bold;text-align:right;">${formatDollar(income)}</td>
     <td></td>
     <td></td>
+    <td class="pct-spending-col"></td>
     <td style="font-weight:bold;text-align:center;">100%</td>
   </tr>`;
-  html += `<tr class="spacer-row"><td colspan="5"></td></tr>`;
+  html += `<tr class="spacer-row"><td colspan="6"></td></tr>`;
 
   data.buckets.forEach(bucket => {
-    html += _renderBucketSection(bucket, income);
+    html += _renderBucketSection(bucket, income, data.total_spending);
   });
 
   html += _renderGrandReveal(data);
